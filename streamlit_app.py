@@ -3,38 +3,38 @@ import requests
 import pandas as pd
 from supabase import create_client
 
-# --- 1. INITIALIZATION & CONNECTION ---
-st.set_page_config(page_title="CodeMaster: Classroom Edition", layout="wide")
+# --- 1. INITIALIZATION ---
+st.set_page_config(page_title="CodeMaster LMS", layout="wide")
 
-# Connect to Supabase
+# Database Connection
 try:
     url = st.secrets["SUPABASE_URL"]
     key = st.secrets["SUPABASE_KEY"]
     supabase = create_client(url, key)
 except Exception as e:
-    st.error(f"Missing Supabase Secrets: {e}")
+    st.error("🚨 Configuration Error: Secrets not found!")
+    st.info("Ensure you have a .streamlit/secrets.toml file locally or Secrets configured in Streamlit Cloud.")
     st.stop()
 
 PISTON_URL = "https://emkc.org/api/v2/piston/execute"
 
-# --- 2. THE SANDBOX ENGINE ---
+# --- 2. THE ENGINE ---
 def run_code_in_sandbox(code, test_input):
-    """Executes code in a secure container."""
+    """Executes Python code safely via Piston API."""
     payload = {
         "language": "python",
         "version": "3.10.0",
         "files": [{"content": code}],
-        "stdin": str(test_input) + "\n" # The '\n' simulates hitting Enter
+        "stdin": str(test_input) + "\n"
     }
     try:
-        response = requests.post(PISTON_URL, json=payload, timeout=10)
+        response = requests.post(PISTON_URL, json=payload, timeout=12)
         res = response.json()
-        run_info = res.get('run', {})
-        stdout = run_info.get('output', "").strip()
-        stderr = run_info.get('stderr', "").strip()
+        run_data = res.get('run', {})
+        stdout = run_data.get('output', "").strip()
+        stderr = run_data.get('stderr', "").strip()
 
         if stderr:
-            # Detect common student errors for the leaderboard
             if "SyntaxError" in stderr: return "SYNTAX_ERR", stderr
             if "IndentationError" in stderr: return "INDENT_ERR", stderr
             return "RUNTIME_ERR", stderr
@@ -43,149 +43,158 @@ def run_code_in_sandbox(code, test_input):
             return "NO_PRINT", "Code ran but printed nothing. Use print()!"
             
         return "SUCCESS", stdout
-    except:
-        return "TIMEOUT", "Execution took too long!"
+    except Exception as e:
+        return "TIMEOUT", f"Execution failed: {e}"
 
-# --- 3. DATABASE HELPERS ---
-def get_task(c_name, p_num):
+# --- 3. DATABASE LOGIC ---
+def get_current_task(c_name, p_num):
     res = supabase.table("current_task").select("*").eq("class_name", c_name).eq("period", p_num).execute()
-    return res.data[0] if res.data else {"goal_input": "", "expected_output": ""}
+    if res.data:
+        return res.data[0]
+    return {"goal_input": "", "expected_output": "", "task_description": "No instructions provided yet."}
 
-def update_task(c_name, p_num, in_val, out_val):
-    supabase.table("current_task").upsert({
-        "class_name": c_name, "period": p_num, 
-        "goal_input": in_val, "expected_output": out_val
-    }, on_conflict="class_name, period").execute()
-
-# --- 4. SIDEBAR: CLASS SETUP ---
+# --- 4. SIDEBAR: LMS CONTROLS ---
 with st.sidebar:
-    st.title("🏫 Class Setup")
-    t_name = st.text_input("Teacher Name", value="Grom")
+    st.header("🏫 Class Management")
+    teacher = st.text_input("Teacher Name", value="Grom")
     
-    # Fetch classes linked to this teacher
-    roster_res = supabase.table("rosters").select("class_name").eq("teacher_name", t_name).execute().data
-    unique_classes = list(set([r['class_name'] for r in roster_res])) if roster_res else ["Intro to CS"]
+    # Dynamic Class Selection
+    roster_check = supabase.table("rosters").select("class_name").eq("teacher_name", teacher).execute().data
+    classes = list(set([r['class_name'] for r in roster_check])) if roster_check else ["Python 101"]
     
-    sel_class = st.selectbox("Select Class", unique_classes)
+    sel_class = st.selectbox("Select Class", classes)
     sel_period = st.selectbox("Select Period", ["1", "2", "3", "4", "5", "6", "7", "8"])
 
     st.divider()
-    with st.expander("📋 Manage Roster"):
-        st.write("Paste list of names (one per line):")
-        bulk_names = st.text_area("Names:")
-        if st.button("Update Roster"):
-            name_list = [n.strip() for n in bulk_names.split("\n") if n.strip()]
-            bulk_data = [{"teacher_name": t_name, "class_name": sel_class, "period": sel_period, "student_name": n} for n in name_list]
+    with st.expander("📋 Bulk Roster Upload"):
+        st.write("Paste names (one per line):")
+        raw_names = st.text_area("Student Names", height=150)
+        if st.button("Save Roster"):
+            name_list = [n.strip() for n in raw_names.split("\n") if n.strip()]
+            bulk_data = [
+                {"teacher_name": teacher, "class_name": sel_class, "period": sel_period, "student_name": n} 
+                for n in name_list
+            ]
             supabase.table("rosters").upsert(bulk_data).execute()
-            st.success(f"Added {len(name_list)} students.")
+            st.success(f"Loaded {len(name_list)} students!")
             st.rerun()
 
-# Global variables based on selection
-current_task = get_task(sel_class, sel_period)
+# Get Global Task for this specific Class/Period
+task = get_current_task(sel_class, sel_period)
 
-# --- 5. THE MAIN UI ---
-tab_student, tab_leaderboard, tab_teacher = st.tabs(["📝 Student", "🏆 Leaderboard", "👨‍🏫 Teacher"])
+# --- 5. APP TABS ---
+tab_student, tab_leaderboard, tab_teacher = st.tabs(["📝 Student View", "🏆 Leaderboard", "👨‍🏫 Teacher Tools"])
 
 # --- STUDENT TAB ---
 with tab_student:
-    st.header(f"Assignment: {sel_class} (P{sel_period})")
-    st.info(f"🎯 **Goal:** Produce `{current_task['expected_output']}` using input `{current_task['goal_input']}`")
+    st.title(f"{sel_class} - Period {sel_period}")
     
-    # Get names only for THIS class
-    class_roster = supabase.table("rosters").select("student_name").eq("class_name", sel_class).eq("period", sel_period).execute().data
-    student_options = [r['student_name'] for r in class_roster] if class_roster else ["No Roster Found"]
+    # Display the Teacher's Instructions
+    with st.container(border=True):
+        st.subheader("📋 Instructions")
+        st.markdown(task.get('task_description', "No instructions provided yet."))
+        st.divider()
+        col_in, col_out = st.columns(2)
+        col_in.metric("Goal Input", f"`{task['goal_input']}`")
+        col_out.metric("Expected Output", f"`{task['expected_output']}`")
     
-    s_name = st.selectbox("Select Your Name:", student_options)
-    s_code = st.text_area("Your Python Code:", height=250, placeholder="import ast\ns = input()...")
+    # Roster Selection
+    roster_res = supabase.table("rosters").select("student_name").eq("class_name", sel_class).eq("period", sel_period).execute().data
+    names = [r['student_name'] for r in roster_res] if roster_res else ["Roster Empty"]
+    
+    current_user = st.selectbox("Select Your Name:", names)
+    code_in = st.text_area("Python Editor:", height=300, placeholder="# Write your code here...")
     
     if st.button("🚀 Run & Submit"):
-        with st.spinner("Executing..."):
-            status_type, result = run_code_in_sandbox(s_code, current_task['goal_input'])
-            
-            # Grade Logic (Space Insensitive)
-            final_status = status_type
-            clean_res = str(result).replace(" ", "").strip()
-            clean_target = str(current_task['expected_output']).replace(" ", "").strip()
-            
-            if status_type == "SUCCESS":
-                final_status = "PASSED ✅" if clean_res == clean_target else "WRONG OUTPUT ❌"
+        status, output = run_code_in_sandbox(code_in, task['goal_input'])
+        
+        # Space-insensitive grading
+        clean_out = str(output).replace(" ", "").strip()
+        clean_target = str(task['expected_output']).replace(" ", "").strip()
+        
+        final_status = status
+        if status == "SUCCESS":
+            final_status = "PASSED ✅" if clean_out == clean_target else "WRONG OUTPUT ❌"
 
-            # Upsert Submission
-            supabase.table("submissions").upsert({
-                "name": s_name, "class_name": sel_class, "period": sel_period,
-                "code": s_code, "status": final_status, "output": result
-            }, on_conflict="name, class_name, period").execute()
-            
-            if "PASSED" in final_status: st.success(f"Output: {result}")
-            else: st.warning(f"Status: {final_status} | Output: {result}")
+        # Record Submission
+        supabase.table("submissions").upsert({
+            "name": current_user, "class_name": sel_class, "period": sel_period,
+            "code": code_in, "status": final_status, "output": output
+        }, on_conflict="name, class_name, period").execute()
+        
+        if "PASSED" in final_status: st.success(f"Result: {output}")
+        else: st.warning(f"Status: {final_status} | Result: {output}")
 
 # --- LEADERBOARD TAB ---
 with tab_leaderboard:
-    st.header(f"Live Progress - P{sel_period}")
-    if st.button("🔄 Refresh Board"):
-        # Data Merge (Left Join)
-        roster_df = pd.DataFrame(class_roster)
-        subs_raw = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", sel_period).execute().data
-        subs_df = pd.DataFrame(subs_raw) if subs_raw else pd.DataFrame(columns=['name', 'status'])
+    st.header(f"Class Progress: {sel_class} P{sel_period}")
+    if st.button("🔄 Refresh Standings"):
+        r_df = pd.DataFrame(roster_res)
+        s_raw = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", sel_period).execute().data
+        s_df = pd.DataFrame(s_raw) if s_raw else pd.DataFrame(columns=['name', 'status'])
         
-        if not roster_df.empty:
-            merged = pd.merge(roster_df, subs_df, left_on='student_name', right_on='name', how='left')
-            merged['status'] = merged['status'].fillna("NO SUBMISSION ⚪")
+        if not r_df.empty:
+            merged = pd.merge(r_df, s_df, left_on='student_name', right_on='name', how='left')
+            merged['status'] = merged['status'].fillna("NOT SUBMITTED ⚪")
             
-            # Sort: Passed first, Errors second, Not Submitted last
-            def sort_rank(val):
-                if "PASSED" in val: return 0
-                if "❌" in val or "ERR" in val: return 1
-                return 2
-            merged['rank'] = merged['status'].apply(sort_rank)
+            rank_map = {"PASSED ✅": 0, "WRONG OUTPUT ❌": 1, "SYNTAX_ERR": 1, "INDENT_ERR": 1, "RUNTIME_ERR": 1, "NO_PRINT": 1}
+            merged['rank'] = merged['status'].apply(lambda x: rank_map.get(x, 2))
             merged = merged.sort_values('rank')
 
-            # Display
-            def color_rows(val):
-                c = '#2ecc71' if 'PASSED' in val else ('#e74c3c' if 'ERR' in val else ('#f39c12' if 'WRONG' in val else '#95a5a6'))
-                return f'background-color: {c}; color: white; font-weight: bold'
-            
-            st.dataframe(merged[['student_name', 'status']].style.applymap(color_rows, subset=['status']), use_container_width=True)
+            def style_status(val):
+                color = '#2ecc71' if 'PASSED' in val else ('#e74c3c' if 'ERR' in val else ('#f39c12' if 'WRONG' in val else '#95a5a6'))
+                return f'background-color: {color}; color: white; font-weight: bold'
+
+            st.dataframe(merged[['student_name', 'status']].style.applymap(style_status, subset=['status']), use_container_width=True)
+        else:
+            st.warning("Please upload a roster in the sidebar first.")
 
 # --- TEACHER TAB ---
 with tab_teacher:
-    st.header("Instructional Controls")
+    st.header("Teacher Dashboard")
     
-    # 1. SET TASK
-    with st.expander("🎯 Set Current Task", expanded=True):
-        col1, col2 = st.columns(2)
-        new_in = col1.text_input("Input (Stdin):", value=current_task['goal_input'])
-        new_out = col2.text_input("Expected Result:", value=current_task['expected_output'])
-        if st.button("Update Class Task"):
-            update_task(sel_class, sel_period, new_in, new_out)
-            st.success("Updated!")
+    # 1. ASSIGNMENT CONTROL
+    with st.expander("🎯 Set Daily Assignment", expanded=True):
+        new_desc = st.text_area("Task Description (Markdown supported):", value=task.get('task_description', ""), height=150)
+        c1, c2 = st.columns(2)
+        goal_in = c1.text_input("Goal Input (Stdin):", value=task['goal_input'])
+        goal_out = c2.text_input("Expected Output (Stdout):", value=task['expected_output'])
+        
+        if st.button("Broadcast Task to Students"):
+            supabase.table("current_task").upsert({
+                "class_name": sel_class, "period": sel_period,
+                "task_description": new_desc,
+                "goal_input": goal_in, "expected_output": goal_out
+            }, on_conflict="class_name, period").execute()
+            st.success("Task and Instructions updated!")
             st.rerun()
 
-    # 2. PROJECTOR MODE (The "Share Knowledge" Tool)
+    # 2. PROJECTOR MODE
     st.divider()
     st.subheader("🔦 Projector Mode / Code Review")
+    active_subs = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", sel_period).execute().data
     
-    # Get all submitted code
-    submissions = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", sel_period).execute().data
-    if submissions:
-        sub_df = pd.DataFrame(submissions)
-        target = st.selectbox("Select Student to Feature:", sub_df['name'].tolist())
-        student_data = sub_df[sub_df['name'] == target].iloc[0]
+    if active_subs:
+        as_df = pd.DataFrame(active_subs)
+        target_student = st.selectbox("Select Student to Review:", as_df['name'].tolist())
+        row = as_df[as_df['name'] == target_student].iloc[0]
         
-        projector_on = st.toggle("Enable Fullscreen Projector")
+        is_projecting = st.toggle("🚀 Enter Fullscreen Projector Mode")
         
-        if projector_on:
-            st.title(f"Code Analysis: {target}")
-            st.code(student_data['code'], language="python")
-            st.info(f"Program Result: {student_data['output']}")
-            st.write(f"Current Status: {student_data['status']}")
+        if is_projecting:
+            st.title(f"Code Analysis: {target_student}")
+            st.code(row['code'], language="python")
+            st.info(f"Student Output: {row['output']}")
+            st.write(f"Submission Status: **{row['status']}**")
         else:
-            st.code(student_data['code'])
-            st.text_input("Private Comment to Student:", value=student_data.get('teacher_comment', ""))
-    
+            st.code(row['code'])
+            st.text_area("Teacher Feedback (Saved to DB):", value=row.get('teacher_comment', ""))
+    else:
+        st.info("Waiting for first submission...")
+
     # 3. RESET
     st.divider()
-    if st.button("🧨 Clear All Period Submissions"):
+    if st.button("🧨 Clear Submissions (Current Period)"):
         supabase.table("submissions").delete().eq("class_name", sel_class).eq("period", sel_period).execute()
-        st.warning("Database Cleared for this period.")
+        st.success("Period data reset.")
         st.rerun()
