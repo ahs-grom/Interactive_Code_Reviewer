@@ -23,7 +23,7 @@ def run_code_in_sandbox(code, test_input=""):
         "language": "python",
         "version": "3.10.0",
         "files": [{"content": code}],
-        "stdin": test_input
+        "stdin": test_input + "\n"  # Add the "Enter" key automatically
     }
     try:
         response = requests.post(PISTON_URL, json=payload, timeout=8)
