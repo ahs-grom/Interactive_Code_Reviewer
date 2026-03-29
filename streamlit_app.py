@@ -48,9 +48,12 @@ def run_code_in_sandbox(code, test_input):
 
 # --- 3. DATABASE LOGIC ---
 def get_current_task(c_name, p_num):
-    res = supabase.table("current_task").select("*").eq("class_name", c_name).eq("period", p_num).execute()
-    if res.data:
-        return res.data[0]
+    try:
+        res = supabase.table("current_task").select("*").eq("class_name", c_name).eq("period", p_num).execute()
+        if res.data:
+            return res.data[0]
+    except:
+        pass
     return {"goal_input": "", "expected_output": "", "task_description": "No instructions provided yet."}
 
 # --- 4. SIDEBAR: LMS CONTROLS ---
@@ -95,8 +98,8 @@ with tab_student:
         st.markdown(task.get('task_description', "No instructions provided yet."))
         st.divider()
         col_in, col_out = st.columns(2)
-        col_in.metric("Goal Input", f"`{task['goal_input']}`")
-        col_out.metric("Expected Output", f"`{task['expected_output']}`")
+        col_in.metric("Goal Input", f"`{task.get('goal_input', '')}`")
+        col_out.metric("Expected Output", f"`{task.get('expected_output', '')}`")
     
     # Roster Selection
     roster_res = supabase.table("rosters").select("student_name").eq("class_name", sel_class).eq("period", sel_period).execute().data
@@ -106,11 +109,11 @@ with tab_student:
     code_in = st.text_area("Python Editor:", height=300, placeholder="# Write your code here...")
     
     if st.button("🚀 Run & Submit"):
-        status, output = run_code_in_sandbox(code_in, task['goal_input'])
+        status, output = run_code_in_sandbox(code_in, task.get('goal_input', ''))
         
         # Space-insensitive grading
         clean_out = str(output).replace(" ", "").strip()
-        clean_target = str(task['expected_output']).replace(" ", "").strip()
+        clean_target = str(task.get('expected_output', '')).replace(" ", "").strip()
         
         final_status = status
         if status == "SUCCESS":
@@ -157,8 +160,8 @@ with tab_teacher:
     with st.expander("🎯 Set Daily Assignment", expanded=True):
         new_desc = st.text_area("Task Description (Markdown supported):", value=task.get('task_description', ""), height=150)
         c1, c2 = st.columns(2)
-        goal_in = c1.text_input("Goal Input (Stdin):", value=task['goal_input'])
-        goal_out = c2.text_input("Expected Output (Stdout):", value=task['expected_output'])
+        goal_in = c1.text_input("Goal Input (Stdin):", value=task.get('goal_input', ""))
+        goal_out = c2.text_input("Expected Output (Stdout):", value=task.get('expected_output', ""))
         
         if st.button("Broadcast Task to Students"):
             supabase.table("current_task").upsert({
