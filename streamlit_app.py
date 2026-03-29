@@ -19,11 +19,15 @@ PISTON_URL = "https://emkc.org/api/v2/piston/execute"
 
 # --- 2. THE ENGINE ---
 def run_code_in_sandbox(code, test_input):
+    """Executes Python code safely via Piston API."""
+    # Logic: If teacher input is empty, send a newline to prevent EOFError
+    safe_input = str(test_input) + "\n" if test_input else "\n"
+    
     payload = {
         "language": "python",
         "version": "3.10.0",
         "files": [{"content": code}],
-        "stdin": str(test_input) + "\n"
+        "stdin": safe_input
     }
     try:
         response = requests.post(PISTON_URL, json=payload, timeout=12)
@@ -31,15 +35,18 @@ def run_code_in_sandbox(code, test_input):
         run_data = res.get('run', {})
         stdout = run_data.get('output', "").strip()
         stderr = run_data.get('stderr', "").strip()
+        
+        # Priority 1: If there's a crash/error, return the error message
         if stderr:
-            if "SyntaxError" in stderr: return "SYNTAX_ERR", stderr
-            if "IndentationError" in stderr: return "INDENT_ERR", stderr
             return "RUNTIME_ERR", stderr
+        
+        # Priority 2: If it ran but said nothing
         if not stdout:
-            return "NO_PRINT", "Code ran but printed nothing."
+            return "NO_PRINT", "Code ran but printed nothing. Did you use print()?"
+            
         return "SUCCESS", stdout
     except Exception as e:
-        return "TIMEOUT", f"Error: {e}"
+        return "TIMEOUT", f"Execution failed: {e}"
 
 # --- 3. DATABASE LOGIC ---
 def get_current_task(c_name, p_num):
@@ -49,7 +56,6 @@ def get_current_task(c_name, p_num):
             return res.data[0]
     except:
         pass
-    # Return empty strings instead of "No instructions" filler
     return {"goal_input": "", "expected_output": "", "task_description": ""}
 
 # --- 4. SIDEBAR: LMS CONTROLS ---
@@ -88,7 +94,9 @@ with tab_student:
             st.markdown(task['task_description'])
             st.divider()
             col_in, col_out = st.columns(2)
-            col_in.metric("Goal Input", f"`{task.get('goal_input', '')}`")
+            # Display 'None' visually if empty
+            display_in = task.get('goal_input') if task.get('goal_input') else "None"
+            col_in.metric("Goal Input", f"`{display_in}`")
             col_out.metric("Expected Output", f"`{task.get('expected_output', '')}`")
     else:
         st.warning("No assignment posted for this period yet.")
@@ -101,6 +109,8 @@ with tab_student:
     
     if st.button("🚀 Run & Submit"):
         status, output = run_code_in_sandbox(code_in, task.get('goal_input', ''))
+        
+        # Space-insensitive grading
         clean_out = str(output).replace(" ", "").strip()
         clean_target = str(task.get('expected_output', '')).replace(" ", "").strip()
         
@@ -108,13 +118,18 @@ with tab_student:
         if status == "SUCCESS":
             final_status = "PASSED ✅" if clean_out == clean_target else "WRONG OUTPUT ❌"
 
+        # Record Submission
         supabase.table("submissions").upsert({
             "name": current_user, "class_name": sel_class, "period": sel_period,
             "code": code_in, "status": final_status, "output": output
         }, on_conflict="name, class_name, period").execute()
         
-        if "PASSED" in final_status: st.success(f"Result: {output}")
-        else: st.warning(f"Status: {final_status} | Result: {output}")
+        if "PASSED" in final_status: 
+            st.success(f"Result: {output}")
+        elif "ERR" in final_status:
+            st.error(f"Execution Error: {output}")
+        else: 
+            st.warning(f"Status: {final_status} | Result: {output}")
 
 # --- LEADERBOARD TAB ---
 with tab_leaderboard:
@@ -142,10 +157,9 @@ with tab_teacher:
     st.header("Teacher Dashboard")
     
     with st.expander("🎯 Set Daily Assignment", expanded=True):
-        # Default value is now an empty string
         new_desc = st.text_area("Task Description:", value=task.get('task_description', ""), height=150)
         c1, c2 = st.columns(2)
-        goal_in = c1.text_input("Goal Input:", value=task.get('goal_input', ""))
+        goal_in = c1.text_input("Goal Input (Optional):", value=task.get('goal_input', ""))
         goal_out = c2.text_input("Expected Output:", value=task.get('expected_output', ""))
         
         if st.button("Broadcast Task"):
@@ -159,7 +173,6 @@ with tab_teacher:
                 st.rerun()
             except Exception as e:
                 st.error(f"Database Error: {e}")
-                st.info("Try running the SQL 'TRUNCATE' command to clear duplicates.")
 
     st.divider()
     active_subs = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", sel_period).execute().data
