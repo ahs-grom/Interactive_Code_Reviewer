@@ -6,7 +6,6 @@ from supabase import create_client
 # --- 1. INITIALIZATION ---
 st.set_page_config(page_title="CodeMaster LMS", layout="wide")
 
-# Database Connection
 try:
     url = st.secrets["SUPABASE_URL"]
     key = st.secrets["SUPABASE_KEY"]
@@ -17,10 +16,9 @@ except Exception as e:
 
 PISTON_URL = "https://emkc.org/api/v2/piston/execute"
 
-# --- 2. THE ENGINE ---
+# --- 2. THE ENGINE (REBUILT FOR STABILITY) ---
 def run_code_in_sandbox(code, test_input):
-    """Executes Python code safely via Piston API."""
-    # Logic: If teacher input is empty, send a newline to prevent EOFError
+    # Fallback to a newline if input is empty to avoid EOFError
     safe_input = str(test_input) + "\n" if test_input else "\n"
     
     payload = {
@@ -29,24 +27,36 @@ def run_code_in_sandbox(code, test_input):
         "files": [{"content": code}],
         "stdin": safe_input
     }
+    
     try:
-        response = requests.post(PISTON_URL, json=payload, timeout=12)
+        response = requests.post(PISTON_URL, json=payload, timeout=15)
+        response.raise_for_status() # Check for HTTP errors
         res = response.json()
-        run_data = res.get('run', {})
-        stdout = run_data.get('output', "").strip()
-        stderr = run_data.get('stderr', "").strip()
         
-        # Priority 1: If there's a crash/error, return the error message
+        # Piston structure: res['run']['output'], res['run']['stderr'], etc.
+        run_data = res.get('run', {})
+        stdout = run_data.get('stdout', "") # Use 'stdout' specifically
+        stderr = run_data.get('stderr', "")
+        output = run_data.get('output', "") # Combined output
+        
+        # 1. Handle Runtime/Compile Errors
         if stderr:
             return "RUNTIME_ERR", stderr
         
-        # Priority 2: If it ran but said nothing
-        if not stdout:
-            return "NO_PRINT", "Code ran but printed nothing. Did you use print()?"
+        # 2. Handle Case where code ran but produced literally nothing
+        # We check stdout specifically to see if a print() happened
+        if not stdout.strip():
+            # If there's an 'output' but no 'stdout', it might be a weird API quirk
+            if output.strip():
+                return "SUCCESS", output.strip()
+            return "NO_PRINT", "The sandbox received your code but no text was printed to the console."
             
-        return "SUCCESS", stdout
+        return "SUCCESS", stdout.strip()
+
+    except requests.exceptions.Timeout:
+        return "TIMEOUT", "The code took too long to run (Infinite loop?)"
     except Exception as e:
-        return "TIMEOUT", f"Execution failed: {e}"
+        return "API_ERROR", f"Sandbox Communication Error: {str(e)}"
 
 # --- 3. DATABASE LOGIC ---
 def get_current_task(c_name, p_num):
@@ -88,13 +98,12 @@ tab_student, tab_leaderboard, tab_teacher = st.tabs(["📝 Student View", "🏆 
 with tab_student:
     st.title(f"{sel_class} - Period {sel_period}")
     
-    if task.get('task_description'):
+    if task.get('task_description') or task.get('expected_output'):
         with st.container(border=True):
             st.subheader("📋 Instructions")
-            st.markdown(task['task_description'])
+            st.markdown(task.get('task_description', "No description provided."))
             st.divider()
             col_in, col_out = st.columns(2)
-            # Display 'None' visually if empty
             display_in = task.get('goal_input') if task.get('goal_input') else "None"
             col_in.metric("Goal Input", f"`{display_in}`")
             col_out.metric("Expected Output", f"`{task.get('expected_output', '')}`")
@@ -105,31 +114,37 @@ with tab_student:
     names = [r['student_name'] for r in roster_res] if roster_res else ["Roster Empty"]
     
     current_user = st.selectbox("Select Your Name:", names)
-    code_in = st.text_area("Python Editor:", height=300)
+    code_in = st.text_area("Python Editor:", height=300, key="editor")
     
     if st.button("🚀 Run & Submit"):
-        status, output = run_code_in_sandbox(code_in, task.get('goal_input', ''))
-        
-        # Space-insensitive grading
-        clean_out = str(output).replace(" ", "").strip()
-        clean_target = str(task.get('expected_output', '')).replace(" ", "").strip()
-        
-        final_status = status
-        if status == "SUCCESS":
-            final_status = "PASSED ✅" if clean_out == clean_target else "WRONG OUTPUT ❌"
+        if not code_in.strip():
+            st.error("Please write some code before running!")
+        else:
+            with st.spinner("Executing on server..."):
+                status, output = run_code_in_sandbox(code_in, task.get('goal_input', ''))
+            
+            clean_out = str(output).replace(" ", "").strip()
+            clean_target = str(task.get('expected_output', '')).replace(" ", "").strip()
+            
+            final_status = status
+            if status == "SUCCESS":
+                final_status = "PASSED ✅" if clean_out == clean_target else "WRONG OUTPUT ❌"
 
-        # Record Submission
-        supabase.table("submissions").upsert({
-            "name": current_user, "class_name": sel_class, "period": sel_period,
-            "code": code_in, "status": final_status, "output": output
-        }, on_conflict="name, class_name, period").execute()
-        
-        if "PASSED" in final_status: 
-            st.success(f"Result: {output}")
-        elif "ERR" in final_status:
-            st.error(f"Execution Error: {output}")
-        else: 
-            st.warning(f"Status: {final_status} | Result: {output}")
+            # Record Submission
+            try:
+                supabase.table("submissions").upsert({
+                    "name": current_user, "class_name": sel_class, "period": sel_period,
+                    "code": code_in, "status": final_status, "output": output
+                }, on_conflict="name, class_name, period").execute()
+            except Exception as e:
+                st.error(f"Failed to save to database: {e}")
+            
+            if "PASSED" in final_status: 
+                st.success(f"Result: {output}")
+            elif "ERR" in final_status:
+                st.error(f"Execution Error: \n{output}")
+            else: 
+                st.warning(f"Status: {final_status} | Result: {output}")
 
 # --- LEADERBOARD TAB ---
 with tab_leaderboard:
@@ -142,12 +157,12 @@ with tab_leaderboard:
         if not r_df.empty:
             merged = pd.merge(r_df, s_df, left_on='student_name', right_on='name', how='left')
             merged['status'] = merged['status'].fillna("NOT SUBMITTED ⚪")
-            rank_map = {"PASSED ✅": 0, "WRONG OUTPUT ❌": 1, "SYNTAX_ERR": 1, "INDENT_ERR": 1, "RUNTIME_ERR": 1, "NO_PRINT": 1}
+            rank_map = {"PASSED ✅": 0, "WRONG OUTPUT ❌": 1, "RUNTIME_ERR": 1, "NO_PRINT": 1, "TIMEOUT": 1}
             merged['rank'] = merged['status'].apply(lambda x: rank_map.get(x, 2))
             merged = merged.sort_values('rank')
 
             def style_status(val):
-                color = '#2ecc71' if 'PASSED' in val else ('#e74c3c' if 'ERR' in val else ('#f39c12' if 'WRONG' in val else '#95a5a6'))
+                color = '#2ecc71' if 'PASSED' in val else ('#e74c3c' if 'ERR' in val or 'TIMEOUT' in val else ('#f39c12' if 'WRONG' in val else '#95a5a6'))
                 return f'background-color: {color}; color: white; font-weight: bold'
 
             st.dataframe(merged[['student_name', 'status']].style.applymap(style_status, subset=['status']), use_container_width=True)
