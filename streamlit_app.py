@@ -92,7 +92,8 @@ if st.session_state.role == "teacher":
             s_df = pd.DataFrame(subs) if subs else pd.DataFrame(columns=['name', 'status', 'code', 'output'])
             merged = pd.merge(r_df, s_df, left_on='student_name', right_on='name', how='left').fillna("NOT SUBMITTED ⚪")
             
-            st.dataframe(merged[['student_name', 'status']], use_container_width=True)
+            # Change use_container_width=True to width="stretch"
+            st.dataframe(merged[['student_name', 'status']], width="stretch")
             st.divider()
             
             if not s_df.empty:
