@@ -126,14 +126,30 @@ if st.session_state.role == "teacher":
                 supabase.table("current_task").upsert({"class_name": sel_class, "period": sel_period, "task_description": new_desc, "goal_input": gi, "expected_output": go}, on_conflict="class_name, period").execute()
                 st.success("Updated!")
 
-        # ROSTER UPLOAD
+        # ROSTER UPLOAD (STABLE VERSION)
         with st.expander("👥 Manage Roster"):
-            raw = st.text_area("Paste Student Names (one per line):")
+            st.write(f"Editing: **{sel_class} - P{sel_period}**")
+            raw = st.text_area("Paste Student Names (one per line):", help="This will replace the current roster for this period.")
+            
             if st.button("Save Roster"):
-                names = [n.strip() for n in raw.split("\n") if n.strip()]
-                data = [{"teacher_name": teacher_name, "class_name": sel_class, "period": sel_period, "student_name": n} for n in names]
-                supabase.table("rosters").upsert(data).execute()
-                st.rerun()
+                if raw.strip():
+                    names = [n.strip() for n in raw.split("\n") if n.strip()]
+                    data = [{"teacher_name": teacher_name, "class_name": sel_class, "period": sel_period, "student_name": n} for n in names]
+                    
+                    try:
+                        # 1. Clear the old roster for THIS class and period only
+                        supabase.table("rosters").delete().eq("class_name", sel_class).eq("period", sel_period).execute()
+                        
+                        # 2. Insert the new clean list
+                        supabase.table("rosters").insert(data).execute()
+                        
+                        st.success(f"Successfully loaded {len(names)} students!")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Database Error: {e}")
+                else:
+                    st.warning("Please enter at least one name.")
 
 # STUDENT VIEW
 else:
