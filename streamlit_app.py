@@ -118,15 +118,29 @@ if st.session_state.role == "teacher":
                 st.success(f"{new_c_name} created! Refreshing...")
                 st.rerun()
 
-        # BROADCAST TASK
-        with st.expander("🎯 Set Daily Assignment", expanded=True):
-            new_desc = st.text_area("Markdown Instructions:", value=task['task_description'])
-            c1, c2 = st.columns(2)
-            gi = c1.text_input("Goal Input:", value=task['goal_input'])
-            go = c2.text_input("Expected Output:", value=task['expected_output'])
-            if st.button("Update Assignment"):
-                supabase.table("current_task").upsert({"class_name": sel_class, "period": sel_period, "task_description": new_desc, "goal_input": gi, "expected_output": go}, on_conflict="class_name, period").execute()
-                st.success("Updated!")
+        if st.button("Broadcast Assignment"):
+            try:
+                # 1. Clear out the old task for THIS class and period
+                # This ensures we don't get a 'Duplicate' error
+                supabase.table("current_task").delete().eq("class_name", sel_class).eq("period", sel_period).execute()
+                
+                # 2. Insert the fresh instructions
+                new_task_data = {
+                    "class_name": sel_class, 
+                    "period": sel_period, 
+                    "task_description": new_desc, 
+                    "goal_input": gi, 
+                    "expected_output": go
+                }
+                
+                supabase.table("current_task").insert(new_task_data).execute()
+                
+                st.success(f"Assignment updated for {sel_class} P{sel_period}!")
+                time.sleep(1)
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"Broadcast Error: {e}")
 
         # ROSTER UPLOAD (STABLE VERSION)
         with st.expander("👥 Manage Roster"):
