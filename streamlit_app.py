@@ -60,6 +60,7 @@ with st.sidebar:
     st.header(f"👋 {st.session_state.role.title()} Portal")
     teacher_name = st.text_input("Instructor Name:", value="Grom")
     
+    # Refresh classes from rosters
     res = supabase.table("rosters").select("class_name").eq("teacher_name", teacher_name).execute().data
     available_classes = sorted(list(set([r['class_name'] for r in res]))) if res else ["No Classes Found"]
     
@@ -76,7 +77,7 @@ def get_task():
         res = supabase.table("current_task").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
         return res[0] if res else {"goal_input": "", "expected_output": "", "task_description": ""}
     except:
-        return {"goal_input": "", "expected_output": "", "task_description": "Setup Required"}
+        return {"goal_input": "", "expected_output": "", "task_description": "Initial Setup..."}
 
 task = get_task()
 
@@ -109,7 +110,7 @@ if st.session_state.role == "teacher":
                 c1.code(student_row['code'])
                 c2.info(f"**Output:**\n{student_row['output']}")
         else:
-            st.warning("No students found in this period.")
+            st.warning("No students in this class/period.")
 
     with tab_settings:
         st.header("🛠️ Class Administration")
@@ -117,17 +118,24 @@ if st.session_state.role == "teacher":
         with st.expander("🆕 Create New Class / Period"):
             c1, c2 = st.columns(2)
             nc_name = c1.text_input("New Class Name:")
-            nc_period = c2.selectbox("For Period:", ["1", "2", "3", "4", "5", "6", "7", "8"], key="cp_new")
+            nc_period = c2.selectbox("For Period:", ["1", "2", "3", "4", "5", "6", "7", "8"], key="cp_new_unique")
             if st.button("Add Class/Period"):
-                supabase.table("rosters").insert({
-                    "teacher_name": teacher_name, 
-                    "class_name": nc_name, 
-                    "period": str(nc_period), 
-                    "student_name": "Teacher_Admin"
-                }).execute()
-                st.success("New Class Initialized!")
-                time.sleep(0.5)
-                st.rerun()
+                if nc_name:
+                    try:
+                        # Use UPSERT to prevent crash if class/period exists
+                        # Requires a unique constraint on (teacher_name, class_name, period, student_name) 
+                        # or just (class_name, period, student_name)
+                        supabase.table("rosters").upsert({
+                            "teacher_name": teacher_name, 
+                            "class_name": nc_name, 
+                            "period": str(nc_period), 
+                            "student_name": "Teacher_Admin"
+                        }, on_conflict="class_name, period, student_name").execute()
+                        st.success("Class Initialized!")
+                        time.sleep(0.5)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error Creating Class: {e}")
 
         with st.expander("🎯 Set/Update Assignment", expanded=True):
             st.write(f"Editing: **{sel_class} - Period {sel_period}**")
@@ -138,7 +146,6 @@ if st.session_state.role == "teacher":
             
             if st.button("🚀 Broadcast to Students"):
                 try:
-                    # UPSERT handles both new tasks and updates to existing tasks
                     task_payload = {
                         "class_name": sel_class, 
                         "period": str(sel_period),
@@ -146,24 +153,26 @@ if st.session_state.role == "teacher":
                         "goal_input": gi, 
                         "expected_output": go
                     }
-                    # We specify the columns that define the "conflict"
                     supabase.table("current_task").upsert(task_payload, on_conflict="class_name, period").execute()
-                    st.success("Task updated for all students!")
+                    st.success("Task updated!")
                     time.sleep(0.5)
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
 
         with st.expander("👥 Manage Student Roster"):
-            raw_names = st.text_area("Names (one per line):", help="Overwrites the current roster for this period.")
+            st.caption(f"Updating roster for {sel_class} - P{sel_period}")
+            raw_names = st.text_area("Names (one per line):")
             if st.button("Save Roster"):
                 names_list = [n.strip() for n in raw_names.split("\n") if n.strip()]
-                data = [{"teacher_name": teacher_name, "class_name": sel_class, "period": str(sel_period), "student_name": n} for n in names_list]
-                supabase.table("rosters").delete().eq("class_name", sel_class).eq("period", str(sel_period)).execute()
-                supabase.table("rosters").insert(data).execute()
-                st.success(f"Roster updated for P{sel_period}!")
-                time.sleep(0.5)
-                st.rerun()
+                if names_list:
+                    data = [{"teacher_name": teacher_name, "class_name": sel_class, "period": str(sel_period), "student_name": n} for n in names_list]
+                    # Clean out the old roster first
+                    supabase.table("rosters").delete().eq("class_name", sel_class).eq("period", str(sel_period)).execute()
+                    supabase.table("rosters").insert(data).execute()
+                    st.success("Roster updated!")
+                    time.sleep(0.5)
+                    st.rerun()
 
 else: # STUDENT VIEW
     st.title(f"📝 {sel_class} - P{sel_period}")
@@ -171,31 +180,23 @@ else: # STUDENT VIEW
         with st.container(border=True):
             st.markdown(task['task_description'])
             st.caption(f"Input Target: `{task['goal_input']}` | Expected: `{task['expected_output']}`")
-    else:
-        st.info("Waiting for teacher to post instructions...")
     
     roster_data = supabase.table("rosters").select("student_name").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
-    names = [r['student_name'] for r in roster_data] if roster_data else ["Roster Not Found"]
+    names = [r['student_name'] for r in roster_data] if roster_data else ["Roster Empty"]
     current_student = st.selectbox("Select Your Name:", names)
-    code_input = st.text_area("Python Editor:", height=300, key="std_editor")
+    code_input = st.text_area("Python Editor:", height=300, key="std_editor_v7")
     
     if st.button("🚀 Run & Submit"):
-        with st.spinner("Executing..."):
+        with st.spinner("Processing..."):
             status, output = run_code_in_sandbox(code_input, task['goal_input'])
-            
+        
         clean_out = str(output).replace(" ", "").strip()
         clean_target = str(task['expected_output']).replace(" ", "").strip()
-        
-        f_status = status
-        if status == "SUCCESS":
-            f_status = "PASSED ✅" if clean_out == clean_target else "WRONG OUTPUT ❌"
+        f_status = "PASSED ✅" if (status == "SUCCESS" and clean_out == clean_target) else status
+        if status == "SUCCESS" and clean_out != clean_target: f_status = "WRONG OUTPUT ❌"
         
         supabase.table("submissions").upsert({
             "name": current_student, "class_name": sel_class, "period": str(sel_period),
             "code": code_input, "status": f_status, "output": str(output)
         }, on_conflict="name, class_name, period").execute()
-        
-        if "PASSED" in f_status:
-            st.success(f"Output: {output}")
-        else:
-            st.warning(f"Status: {f_status} | Output: {output}")
+        st.info(f"Result: {f_status}")
