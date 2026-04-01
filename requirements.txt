@@ -2,4 +2,4 @@ streamlit
 supabase
 requests
 pandas
-streamlit-autorefresh
+streamlit_autorefresh
