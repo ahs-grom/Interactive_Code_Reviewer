@@ -118,7 +118,13 @@ if role == "teacher":
 
             merged = pd.merge(r_df, s_df, left_on='student_name', right_on='name', how='left')
             merged = merged.sort_values(by='created_at', ascending=True, na_position='last')
-            merged['Time'] = merged['created_at'].dt.strftime('%H:%M:%S').fillna("--") if not merged['created_at'].isna().all() else "--"
+            
+            # Formatting logic pass
+            if not merged['created_at'].isna().all():
+                merged['Time'] = merged['created_at'].dt.strftime('%H:%M:%S').fillna("--")
+            else:
+                merged['Time'] = "--"
+            
             merged['status'] = merged['status'].fillna("NOT SUBMITTED ⚪")
             
             def style_status(val):
@@ -136,8 +142,12 @@ if role == "teacher":
                 target = st.selectbox("🔍 Inspect Code:", s_df['name'].tolist())
                 row = s_df[s_df['name'] == target].iloc[0]
                 c1, c2 = st.columns(2)
-                c1.code(row['code'])
-                c2.info(row['output'])
+                with c1:
+                    st.subheader("Code")
+                    st.code(row['code'])
+                with c2:
+                    st.subheader("Output")
+                    st.info(row['output'])
         else:
             st.warning("No students in roster.")
 
@@ -153,7 +163,7 @@ if role == "teacher":
                     supabase.table("rosters").upsert({"teacher_name": user_fullname, "class_name": nc_name, "period": nc_period, "student_name": "_Admin_"}, on_conflict="class_name, period, student_name").execute()
                     st.success("Initialized!")
                     time.sleep(0.5); st.rerun()
-                except Exception as e: st.error(f"Database Error: {e}")
+                except Exception as e: st.error(f"Error: {e}")
 
         with st.expander("👤 Register Student"):
             sc1, sc2 = st.columns(2)
@@ -165,7 +175,7 @@ if role == "teacher":
                     supabase.table("users").upsert({"email": reg_email.lower().strip(), "password": reg_pass, "full_name": reg_name, "role": "student"}).execute()
                     supabase.table("rosters").upsert({"teacher_name": user_fullname, "class_name": sel_class, "period": str(sel_period), "student_name": reg_name}, on_conflict="class_name, period, student_name").execute()
                     st.success("Added!"); time.sleep(0.5); st.rerun()
-                except Exception as e: st.error(f"Database Error: {e}")
+                except Exception as e: st.error(f"Error: {e}")
 
         with st.expander("🎯 Set Assignment Details"):
             new_desc = st.text_area("Instructions (Markdown):", value=task['task_description'], height=200)
@@ -174,15 +184,15 @@ if role == "teacher":
             go = cb.text_input("Expected Output:", value=task['expected_output'])
             if st.button("🚀 Push to Students"):
                 try:
-                    # This is likely where your error was:
                     supabase.table("current_task").upsert({
                         "class_name": sel_class, "period": str(sel_period), 
                         "task_description": new_desc, "goal_input": gi, "expected_output": go
                     }, on_conflict="class_name, period").execute()
                     st.success("Assignment Updated!"); time.sleep(0.5); st.rerun()
                 except Exception as e:
-                    st.error("Database Error: Ensure you ran the SQL 'Unique Constraint' fix.")
-                    st.write(e)
+                    st.error("Database Save Failed.")
+                    st.warning("If RLS is enabled in Supabase, you must add a Policy to allow access.")
+                    st.exception(e)
 
 else: # STUDENT VIEW
     st.title(f"🚀 {sel_class} - P{sel_period}")
@@ -197,5 +207,9 @@ else: # STUDENT VIEW
         clean_out, clean_target = str(output).replace(" ", "").strip(), str(task['expected_output']).replace(" ", "").strip()
         f_status = "PASSED ✅" if (status == "SUCCESS" and clean_out == clean_target) else status
         if status == "SUCCESS" and clean_out != clean_target: f_status = "WRONG OUTPUT ❌"
-        supabase.table("submissions").upsert({"name": user_fullname, "class_name": sel_class, "period": str(sel_period), "code": code_input, "status": f_status, "output": str(output)}, on_conflict="name, class_name, period").execute()
-        st.info(f"Result: {f_status}")
+        
+        try:
+            supabase.table("submissions").upsert({"name": user_fullname, "class_name": sel_class, "period": str(sel_period), "code": code_input, "status": f_status, "output": str(output)}, on_conflict="name, class_name, period").execute()
+            st.info(f"Result: {f_status}")
+        except Exception as e:
+            st.error("Submission failed. Database may be locked by RLS.")
