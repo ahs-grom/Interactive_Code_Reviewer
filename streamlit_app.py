@@ -83,4 +83,83 @@ with st.sidebar:
         res = supabase.table("rosters").select("class_name").eq("student_name", user_fullname).execute().data
     
     available_classes = sorted(list(set([r['class_name'] for r in res]))) if res else ["No Classes Found"]
-    sel_class = st.selectbox("Current Class:", available_classes
+    
+    # FIXED: Added missing closing parenthesis below
+    sel_class = st.selectbox("Current Class:", available_classes)
+    sel_period = st.selectbox("Period:", ["1", "2", "3", "4", "5", "6", "7", "8"])
+    
+    st.divider()
+    if st.button("🚪 Logout"):
+        st.session_state.authenticated = False
+        st.session_state.user_info = {}
+        st.rerun()
+
+def get_task():
+    try:
+        res = supabase.table("current_task").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
+        return res[0] if res else {"goal_input": "", "expected_output": "", "task_description": ""}
+    except:
+        return {"goal_input": "", "expected_output": "", "task_description": "Setup Required"}
+
+task = get_task()
+
+# --- 5. MAIN INTERFACE ---
+if role == "teacher":
+    st_autorefresh(interval=30000, key="datarefresh")
+    tab_leader, tab_settings = st.tabs(["🏆 Live Leaderboard", "⚙️ Admin Tools"])
+    
+    with tab_leader:
+        st.header(f"Live Dashboard: {sel_class} P{sel_period}")
+        roster = supabase.table("rosters").select("student_name").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
+        subs = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
+        
+        if roster:
+            r_df = pd.DataFrame(roster)
+            if subs:
+                s_df = pd.DataFrame(subs)
+                s_df['created_at'] = pd.to_datetime(s_df['created_at'], errors='coerce')
+                try:
+                    s_df['created_at'] = s_df['created_at'].dt.tz_convert('US/Eastern')
+                except: pass
+            else:
+                s_df = pd.DataFrame(columns=['name', 'status', 'code', 'output', 'created_at'])
+                s_df['created_at'] = pd.to_datetime(s_df['created_at'])
+
+            merged = pd.merge(r_df, s_df, left_on='student_name', right_on='name', how='left')
+            merged = merged.sort_values(by='created_at', ascending=True, na_position='last')
+            
+            if not merged['created_at'].isna().all():
+                merged['Time'] = merged['created_at'].dt.strftime('%H:%M:%S').fillna("--")
+            else:
+                merged['Time'] = "--"
+                
+            merged['status'] = merged['status'].fillna("NOT SUBMITTED ⚪")
+            
+            def style_status(val):
+                color = '#2ecc71' if 'PASSED' in val else ('#e74c3c' if 'ERR' in val else ('#f39c12' if 'WRONG' in val else '#95a5a6'))
+                return f'background-color: {color}; color: white; font-weight: bold'
+
+            st.dataframe(
+                merged[['student_name', 'Time', 'status']].style.map(style_status, subset=['status']), 
+                column_config={
+                    "student_name": st.column_config.TextColumn("Student Name", width="medium"),
+                    "Time": st.column_config.TextColumn("Time", width="small"),
+                    "status": st.column_config.TextColumn("Status", width="medium"),
+                },
+                width="stretch", hide_index=True
+            )
+            
+            if not s_df.empty:
+                st.divider()
+                target = st.selectbox("🔍 Inspect Student Code:", s_df['name'].tolist())
+                student_row = s_df[s_df['name'] == target].iloc[0]
+                c1, c2 = st.columns([2,1])
+                c1.code(student_row['code'])
+                c2.info(f"**Output:**\n{student_row['output']}")
+        else:
+            st.warning("No students in roster.")
+
+    with tab_settings:
+        st.header("🛠️ Management")
+        with st.expander("👤 Register Student"):
+            c1, c2 = st.columns
