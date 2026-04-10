@@ -36,9 +36,7 @@ def login_ui():
     with st.form("login_form"):
         email = st.text_input("School Email:").lower().strip()
         password = st.text_input("Password:", type="password")
-        submit = st.form_submit_button("Login")
-        
-        if submit:
+        if st.form_submit_button("Login"):
             try:
                 res = supabase.table("users").select("*").eq("email", email).eq("password", password).execute().data
                 if res:
@@ -48,8 +46,6 @@ def login_ui():
                     st.query_params["user_email"] = user['email']
                     st.query_params["user_name"] = user['full_name']
                     st.query_params["user_role"] = user['role']
-                    st.success("Login successful!")
-                    time.sleep(0.5)
                     st.rerun()
                 else:
                     st.error("Invalid email or password.")
@@ -64,132 +60,113 @@ user_data = st.session_state.get("user_info", {})
 role = user_data.get('role', 'student')
 user_fullname = user_data.get('name', 'User')
 
-# --- 3. SANDBOX ENGINE ---
-def run_code_in_sandbox(code, test_input):
-    payload = {"source_code": code, "language_id": 71, "stdin": str(test_input) if test_input else ""}
-    try:
-        res = requests.post(f"{PUBLIC_MIRROR}/submissions?wait=true", json=payload, timeout=20)
-        data = res.json()
-        stdout, stderr = data.get("stdout"), data.get("stderr")
-        if stderr: return "RUNTIME_ERR", stderr
-        return "SUCCESS", (stdout.strip() if stdout else "NO_PRINT")
-    except Exception:
-        return "CONN_ERR", "Offline"
-
-# --- 4. SIDEBAR & LOGIC ---
+# --- 3. SIDEBAR ---
 with st.sidebar:
     st.header(f"👋 {role.title()} Portal")
     st.info(f"User: **{user_fullname}**")
     
     if role == "teacher":
         res = supabase.table("rosters").select("class_name, period").eq("teacher_name", user_fullname).execute().data
-        if res:
-            available_classes = sorted(list(set([r['class_name'] for r in res])))
-            sel_class = st.selectbox("Current Class:", available_classes)
-            periods = sorted(list(set([str(r['period']) for r in res if r['class_name'] == sel_class])))
-            sel_period = st.selectbox("Period:", periods)
-        else:
-            sel_class, sel_period = "No Classes", "0"
     else:
         res = supabase.table("rosters").select("class_name, period").eq("student_name", user_fullname).execute().data
-        if res:
-            available_classes = sorted(list(set([r['class_name'] for r in res])))
-            sel_class = st.selectbox("Current Class:", available_classes)
-            match = next((item for item in res if item["class_name"] == sel_class), None)
-            sel_period = str(match["period"]) if match else "1"
-        else:
-            sel_class, sel_period = "Unassigned", "0"
     
+    if res:
+        classes = sorted(list(set([r['class_name'] for r in res])))
+        sel_class = st.selectbox("Class:", classes)
+        periods = sorted(list(set([str(r['period']) for r in res if r['class_name'] == sel_class])))
+        sel_period = st.selectbox("Period:", periods)
+    else:
+        sel_class, sel_period = "Unassigned", "0"
+
     if st.button("🚪 Logout"):
         st.query_params.clear()
         st.session_state.clear()
         st.rerun()
 
+# --- 4. DATA FETCH ---
 def get_task():
     try:
         res = supabase.table("current_task").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
-        return res[0] if res else None
+        return res[0] if res else {"task_description": "", "goal_input": "", "expected_output": ""}
     except Exception:
-        return None
+        return {"task_description": "", "goal_input": "", "expected_output": ""}
 
-task_record = get_task()
-task_display = task_record if task_record else {"goal_input": "", "expected_output": "", "task_description": ""}
+current_task = get_task()
 
 # --- 5. MAIN INTERFACE ---
 if role == "teacher":
     st_autorefresh(interval=30000, key="datarefresh")
-    t1, t2 = st.tabs(["🏆 Leaderboard", "⚙️ Assignment Tools"])
+    t1, t2 = st.tabs(["🏆 Leaderboard", "⚙️ Setup"])
     
     with t1:
-        st.header(f"Live Status: {sel_class} P{sel_period}")
+        st.subheader(f"Dashboard: {sel_class} P{sel_period}")
         subs = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
         if subs:
-            df = pd.DataFrame(subs)
-            st.dataframe(df[['name', 'status', 'output']], hide_index=True)
+            st.dataframe(pd.DataFrame(subs)[['name', 'status', 'output']], hide_index=True)
         else:
             st.info("No submissions yet.")
 
     with t2:
-        st.header("Assignment Configuration")
-        with st.form("teacher_task_form"):
-            new_desc = st.text_area("Instructions:", value=task_display.get('task_description', ''))
-            gi = st.text_input("Expected Input:", value=task_display.get('goal_input', ''))
-            go = st.text_input("Expected Output:", value=task_display.get('expected_output', ''))
+        with st.form("task_setup"):
+            new_desc = st.text_area("Markdown Instructions:", value=current_task.get('task_description', ''))
+            new_in = st.text_input("Target Input:", value=current_task.get('goal_input', ''))
+            new_out = st.text_input("Target Output:", value=current_task.get('expected_output', ''))
             
-            if st.form_submit_button("🚀 Update Assignment"):
+            if st.form_submit_button("Update Assignment"):
+                payload = {
+                    "class_name": sel_class, "period": str(sel_period),
+                    "task_description": new_desc, "goal_input": new_in, "expected_output": new_out
+                }
                 try:
-                    # STEP 1: Delete any existing task for this specific class/period
-                    # This clears the way so we don't have to worry about ID conflicts.
-                    supabase.table("current_task").delete().eq("class_name", sel_class).eq("period", str(sel_period)).execute()
-                    
-                    # STEP 2: Insert the fresh task. 
-                    # We do NOT send an ID. The database will pick the next valid available ID.
-                    payload = {
-                        "class_name": sel_class,
-                        "period": str(sel_period),
-                        "task_description": new_desc,
-                        "goal_input": gi,
-                        "expected_output": go
-                    }
-                    supabase.table("current_task").insert(payload).execute()
-                    
-                    st.success("Task Updated!")
+                    # Safely handle current_task (which has the fixed ID sequence)
+                    existing = supabase.table("current_task").select("id").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
+                    if existing:
+                        supabase.table("current_task").update(payload).eq("id", existing[0]['id']).execute()
+                    else:
+                        supabase.table("current_task").insert(payload).execute()
+                    st.success("Updated!")
                     time.sleep(0.5)
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Database Error: {e}")
+                    st.error(f"Save failed: {e}")
 
 else: # STUDENT VIEW
     st.title(f"🚀 {sel_class} - P{sel_period}")
-    if task_display.get('task_description'):
-        st.markdown(task_display['task_description'])
-        st.caption(f"Input: `{task_display.get('goal_input')}` | Expected: `{task_display.get('expected_output')}`")
+    if current_task.get('task_description'):
+        st.markdown(current_task['task_description'])
     
-    btns = [{"name": "Run & Submit", "feather": "Play", "primary": True, "show_name": True, "always_on": True}]
-    response = code_editor("# Write code here...", lang="python", theme="monokai", buttons=btns)
+    btns = [{"name": "Submit", "feather": "Play", "primary": True, "show_name": True, "always_on": True}]
+    response = code_editor("# Write Python here...", lang="python", buttons=btns)
     
     if response.get("type") == "submit" and response.get("text"):
-        code_input = response["text"]
-        with st.spinner("Testing..."):
-            status, output = run_code_in_sandbox(code_input, task_display.get('goal_input', ''))
-        
-        c_out = str(output).replace(" ", "").strip()
-        c_target = str(task_display.get('expected_output', '')).replace(" ", "").strip()
-        f_status = "PASSED ✅" if (status == "SUCCESS" and c_out == c_target) else "FAILED ❌"
-        
+        code = response["text"]
         try:
-            # Similar logic for students: Delete old submission and insert new to avoid ID issues
-            supabase.table("submissions").delete().eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute()
+            sb_res = requests.post(
+                f"{PUBLIC_MIRROR}/submissions?wait=true", 
+                json={"source_code": code, "language_id": 71, "stdin": str(current_task.get('goal_input', ''))}, 
+                timeout=15
+            ).json()
+            
+            actual = str(sb_res.get("stdout", "")).strip()
+            target = str(current_task.get('expected_output', '')).strip()
+            
+            status = "PASSED ✅" if actual == target else "WRONG OUTPUT ❌"
+            if sb_res.get("stderr"): 
+                status = "RUNTIME ERROR ⚠️"
             
             sub_payload = {
-                "name": user_fullname, 
-                "class_name": sel_class, 
-                "period": str(sel_period), 
-                "code": code_input, 
-                "status": f_status, 
-                "output": str(output)
+                "name": user_fullname, "class_name": sel_class, "period": str(sel_period),
+                "code": code, "status": status, "output": actual
             }
-            supabase.table("submissions").insert(sub_payload).execute()
-            st.success(f"Graded: {f_status}")
+            
+            # Safely handle submissions (which does NOT have an ID)
+            existing_sub = supabase.table("submissions").select("*").eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
+            
+            if existing_sub:
+                supabase.table("submissions").update(sub_payload).eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute()
+            else:
+                supabase.table("submissions").insert(sub_payload).execute()
+                
+            st.write(f"Result: {status}")
         except Exception as e:
-            st.error(f"Submission Error: {e}")
+            st.error(f"Error: {e}")
