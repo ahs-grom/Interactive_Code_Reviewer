@@ -102,7 +102,6 @@ if role == "teacher":
         st.subheader(f"Dashboard: {sel_class} P{sel_period}")
         subs = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
         if subs:
-            # RESTORED THE CODE COLUMN HERE
             st.dataframe(pd.DataFrame(subs)[['name', 'status', 'code', 'output']], hide_index=True)
         else:
             st.info("No submissions yet.")
@@ -139,37 +138,52 @@ else: # STUDENT VIEW
     if current_task.get('task_description'):
         st.markdown(current_task['task_description'])
     
-    btns = [{"name": "Submit", "feather": "Play", "primary": True, "show_name": True, "always_on": True}]
-    response = code_editor("# Write Python here...", lang="python", buttons=btns)
-
-    if str(response.get("type")).lower() == "submit" and response.get("text"):
-        code = response["text"]
-        try:
-            sb_res = requests.post(
-                f"{PUBLIC_MIRROR}/submissions?wait=true", 
-                json={"source_code": code, "language_id": 71, "stdin": str(current_task.get('goal_input', ''))}, 
-                timeout=15
-            ).json()
-            
-            actual = str(sb_res.get("stdout", "")).strip()
-            target = str(current_task.get('expected_output', '')).strip()
-            
-            status = "PASSED ✅" if actual == target else "WRONG OUTPUT ❌"
-            if sb_res.get("stderr"): 
-                status = "RUNTIME ERROR ⚠️"
-            
-            sub_payload = {
-                "name": user_fullname, "class_name": sel_class, "period": str(sel_period),
-                "code": code, "status": status, "output": actual
-            }
-            
-            existing_sub = supabase.table("submissions").select("*").eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
-            
-            if existing_sub:
-                supabase.table("submissions").update(sub_payload).eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute()
-            else:
-                supabase.table("submissions").insert(sub_payload).execute()
-                
-            st.write(f"Result: {status}")
-        except Exception as e:
-            st.error(f"Error: {e}")
+    # Plain code editor. No custom buttons to break.
+    response = code_editor("# Write Python here...", lang="python")
+    
+    # Native Streamlit button. Bulletproof.
+    if st.button("🚀 Run & Submit", type="primary"):
+        code = response.get("text", "")
+        
+        if not code.strip() or code.strip() == "# Write Python here...":
+            st.warning("Please write some code before submitting.")
+        else:
+            with st.spinner("Testing code..."):
+                try:
+                    # Sandbox Logic
+                    sb_res = requests.post(
+                        f"{PUBLIC_MIRROR}/submissions?wait=true", 
+                        json={"source_code": code, "language_id": 71, "stdin": str(current_task.get('goal_input', ''))}, 
+                        timeout=15
+                    ).json()
+                    
+                    actual = str(sb_res.get("stdout", "")).strip()
+                    if actual == "None": actual = ""
+                    
+                    target = str(current_task.get('expected_output', '')).strip()
+                    
+                    status = "PASSED ✅" if actual == target else "WRONG OUTPUT ❌"
+                    if sb_res.get("stderr"): 
+                        status = "RUNTIME ERROR ⚠️"
+                    
+                    # Database Logic
+                    sub_payload = {
+                        "name": user_fullname, 
+                        "class_name": sel_class, 
+                        "period": str(sel_period),
+                        "code": code, 
+                        "status": status, 
+                        "output": actual
+                    }
+                    
+                    existing_sub = supabase.table("submissions").select("*").eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
+                    
+                    if existing_sub:
+                        supabase.table("submissions").update(sub_payload).eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute()
+                    else:
+                        supabase.table("submissions").insert(sub_payload).execute()
+                        
+                    st.success(f"Result: {status}")
+                    
+                except Exception as e:
+                    st.error(f"Error: {e}")
