@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import time
 import re
+import personalized_styles
 from datetime import datetime, timezone
 from supabase import create_client
 from streamlit_autorefresh import st_autorefresh
