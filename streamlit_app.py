@@ -52,7 +52,8 @@ def format_python_error(err_text):
                 code_snippet = lines[i+1].strip()
                 
     if line_num != "Unknown":
-        return f"Line {line_num}:  {code_snippet}\n{error_msg}"
+        # Using double newline so Streamlit's Markdown engine forces a hard break
+        return f"Line {line_num}:  {code_snippet}\n\n{error_msg}"
         
     return err_text # Fallback to raw text if it's an unusual error format
 
@@ -232,69 +233,4 @@ else: # STUDENT VIEW
     
     response = code_editor("", lang="python", buttons=editor_btns, key="student_editor_instance")
     
-    if response and response.get("type") == "submit":
-        code = response.get("text", "")
-        
-        if not code.strip():
-            st.warning("Please write some code before submitting.")
-        else:
-            with st.spinner("Executing code & updating database..."):
-                try:
-                    sb_res = requests.post(
-                        f"{PUBLIC_MIRROR}/submissions?wait=true", 
-                        json={"source_code": code, "language_id": 71, "stdin": str(current_task.get('goal_input', ''))}, 
-                        timeout=15
-                    ).json()
-                    
-                    # Extract standard output
-                    actual = str(sb_res.get("stdout", "")).strip()
-                    if actual == "None": actual = ""
-                    
-                    # Extract error outputs (handles runtime and compilation errors)
-                    err_out = str(sb_res.get("stderr", "")).strip()
-                    if err_out == "None": err_out = ""
-                    comp_out = str(sb_res.get("compile_output", "")).strip()
-                    if comp_out == "None": comp_out = ""
-                    
-                    error_output = err_out if err_out else comp_out
-                    
-                    target = str(current_task.get('expected_output', '')).strip()
-                    
-                    status = "PASSED ✅" if actual == target else "WRONG OUTPUT ❌"
-                    if error_output: 
-                        status = "RUNTIME ERROR ⚠️"
-                    
-                    sub_payload = {
-                        "name": user_fullname, 
-                        "class_name": sel_class, 
-                        "period": str(sel_period),
-                        "code": code, 
-                        "status": status, 
-                        "output": actual,
-                        "updated_at": datetime.now(timezone.utc).isoformat()
-                    }
-                    
-                    existing_sub = supabase.table("submissions").select("*").eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
-                    
-                    if existing_sub:
-                        supabase.table("submissions").update(sub_payload).eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute()
-                    else:
-                        supabase.table("submissions").insert(sub_payload).execute()
-                        
-                    st.success(f"Result: {status}")
-                    
-                    # --- DISPLAY EXECUTION OUTPUT TO STUDENT ---
-                    st.markdown("### 🖥️ Execution Output")
-                    if actual:
-                        st.code(actual, language="text")
-                    elif not error_output:
-                        st.info("No standard output produced.")
-                        
-                    if error_output:
-                        st.markdown("### ⚠️ Error Messages")
-                        formatted_err = format_python_error(error_output)
-                        # Using st.error for the red styling, preserving the multiline text
-                        st.error(formatted_err)
-                    
-                except Exception as e:
-                    st.error(f"Execution Error: {e}")
+    if response and
