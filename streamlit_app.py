@@ -221,13 +221,22 @@ else: # STUDENT VIEW
                         timeout=15
                     ).json()
                     
+                    # Extract standard output
                     actual = str(sb_res.get("stdout", "")).strip()
                     if actual == "None": actual = ""
+                    
+                    # Extract error outputs (handles runtime and compilation errors)
+                    err_out = str(sb_res.get("stderr", "")).strip()
+                    if err_out == "None": err_out = ""
+                    comp_out = str(sb_res.get("compile_output", "")).strip()
+                    if comp_out == "None": comp_out = ""
+                    
+                    error_output = err_out if err_out else comp_out
                     
                     target = str(current_task.get('expected_output', '')).strip()
                     
                     status = "PASSED ✅" if actual == target else "WRONG OUTPUT ❌"
-                    if sb_res.get("stderr"): 
+                    if error_output: 
                         status = "RUNTIME ERROR ⚠️"
                     
                     sub_payload = {
@@ -249,5 +258,16 @@ else: # STUDENT VIEW
                         
                     st.success(f"Result: {status}")
                     
+                    # --- DISPLAY EXECUTION OUTPUT TO STUDENT ---
+                    st.markdown("### 🖥️ Execution Output")
+                    if actual:
+                        st.code(actual, language="text")
+                    elif not error_output:
+                        st.info("No standard output produced.")
+                        
+                    if error_output:
+                        st.markdown("### ⚠️ Error Messages")
+                        st.error(error_output)
+                    
                 except Exception as e:
-                    st.error(f"Error: {e}")
+                    st.error(f"Execution Error: {e}")
