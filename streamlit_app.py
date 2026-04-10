@@ -66,7 +66,8 @@ def run_code_in_sandbox(code, test_input):
         data = res.json()
         stdout = data.get("stdout")
         stderr = data.get("stderr")
-        if stderr: return "RUNTIME_ERR", stderr
+        if stderr: 
+            return "RUNTIME_ERR", stderr
         return "SUCCESS", (stdout.strip() if stdout else "NO_PRINT")
     except Exception:
         return "CONN_ERR", "Offline"
@@ -82,7 +83,7 @@ with st.sidebar:
         sel_class = st.selectbox("Current Class:", available_classes)
         sel_period = st.selectbox("Period:", ["1", "2", "3", "4", "5", "6", "7", "8"])
     else:
-        # STUDENT: Auto-detect period from roster
+        # STUDENT: Period is strictly pulled from DB, no selection allowed
         res = supabase.table("rosters").select("class_name, period").eq("student_name", user_fullname).execute().data
         if res:
             available_classes = sorted(list(set([r['class_name'] for r in res])))
@@ -104,7 +105,9 @@ with st.sidebar:
 def get_task():
     try:
         res = supabase.table("current_task").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
-        return res[0] if res else {"goal_input": "", "expected_output": "", "task_description": ""}
+        if res:
+            return res[0]
+        return {"goal_input": "", "expected_output": "", "task_description": "No assignment set yet."}
     except Exception:
         return {"goal_input": "", "expected_output": "", "task_description": "Setup Required"}
 
@@ -187,4 +190,82 @@ if role == "teacher":
             sc1, sc2 = st.columns(2)
             reg_email = sc1.text_input("Email:")
             reg_name = sc2.text_input("Full Name:")
-            reg_pass = st.text_input("Password:", value="python2
+            reg_pass = st.text_input("Password:", value="python2026")
+            if st.button("Create Account"):
+                try:
+                    supabase.table("users").upsert({"email": reg_email.lower().strip(), "password": reg_pass, "full_name": reg_name, "role": "student"}).execute()
+                    supabase.table("rosters").upsert({
+                        "teacher_name": user_fullname, "class_name": sel_class, 
+                        "period": str(sel_period), "student_name": reg_name
+                    }, on_conflict="class_name, period, student_name").execute()
+                    st.success("Added!")
+                    time.sleep(0.5)
+                    st.rerun()
+                except Exception as e: 
+                    st.error(f"Error: {e}")
+
+        with st.expander("🎯 Set Assignment Details"):
+            new_desc = st.text_area("Instructions (Markdown):", value=task.get('task_description', ''), height=200)
+            ca, cb = st.columns(2)
+            gi = ca.text_input("Test Input:", value=task.get('goal_input', ''))
+            go = cb.text_input("Expected Output:", value=task.get('expected_output', ''))
+            if st.button("🚀 Push to Students"):
+                try:
+                    payload = {
+                        "class_name": sel_class, "period": str(sel_period), 
+                        "task_description": new_desc, "goal_input": gi, "expected_output": go
+                    }
+                    supabase.table("current_task").upsert(payload, on_conflict="class_name, period").execute()
+                    st.success("Assignment Updated!")
+                    time.sleep(0.5)
+                    st.rerun()
+                except Exception as e:
+                    st.error("Database Save Failed.")
+                    st.exception(e)
+
+else: # STUDENT VIEW
+    st.title(f"🚀 {sel_class} - P{sel_period}")
+    
+    if task.get('task_description'):
+        with st.container(border=True):
+            st.markdown(task['task_description'])
+            st.caption(f"Input: `{task.get('goal_input', '')}` | Expected: `{task.get('expected_output', '')}`")
+    
+    st.write("### Python Editor")
+    response = code_editor(
+        "", 
+        lang="python", 
+        theme="monokai", 
+        height=[15, 30],
+        options={"tabSize": 4}
+    )
+    
+    code_input = response.get("text", "")
+
+    if st.button("🚀 Run & Submit"):
+        if not code_input:
+            st.warning("Editor is empty!")
+        else:
+            with st.spinner("Testing..."):
+                status, output = run_code_in_sandbox(code_input, task.get('goal_input', ''))
+            
+            clean_out = str(output).replace(" ", "").strip()
+            clean_target = str(task.get('expected_output', '')).replace(" ", "").strip()
+            
+            f_status = "PASSED ✅" if (status == "SUCCESS" and clean_out == clean_target) else status
+            if status == "SUCCESS" and clean_out != clean_target: 
+                f_status = "WRONG OUTPUT ❌"
+            
+            try:
+                sub_payload = {
+                    "name": user_fullname, "class_name": sel_class, "period": str(sel_period), 
+                    "code": code_input, "status": f_status, "output": str(output)
+                }
+                supabase.table("submissions").upsert(sub_payload, on_conflict="name, class_name, period").execute()
+                if "PASSED" in f_status: 
+                    st.success(f"Result: {f_status}")
+                else: 
+                    st.warning(f"Result: {f_status}")
+            except Exception as e:
+                st.error("Submission failed.")
+                st.exception(e)
