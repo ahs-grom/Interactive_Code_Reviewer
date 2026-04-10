@@ -11,8 +11,8 @@ st.set_page_config(page_title="CodeMaster LMS", layout="wide")
 
 # Check query params to persist login across refreshes
 if "authenticated" not in st.session_state:
-    if "user_email" in st.query_params:
-        # Attempt silent re-auth or just trust the param for this demo
+    # Query params return strings; we check for existence
+    if st.query_params.get("user_email"):
         st.session_state.authenticated = True
         st.session_state.user_info = {
             "email": st.query_params["user_email"],
@@ -54,7 +54,7 @@ def login_ui():
                         "name": user['full_name'], 
                         "role": user['role']
                     }
-                    # Set query params so refresh doesn't kill the session
+                    # Set query params for persistence
                     st.query_params["user_email"] = user['email']
                     st.query_params["user_name"] = user['full_name']
                     st.query_params["user_role"] = user['role']
@@ -97,16 +97,12 @@ with st.sidebar:
         if res:
             available_classes = sorted(list(set([r['class_name'] for r in res])))
             sel_class = st.selectbox("Current Class:", available_classes)
-            
-            # Get periods ONLY for the selected class
             periods = sorted(list(set([str(r['period']) for r in res if r['class_name'] == sel_class])))
-            # If only one period exists, it is automatically selected as index 0
             sel_period = st.selectbox("Period:", periods)
         else:
             sel_class = "No Classes"
             sel_period = "0"
     else:
-        # STUDENT: Period is strictly pulled from DB
         res = supabase.table("rosters").select("class_name, period").eq("student_name", user_fullname).execute().data
         if res:
             available_classes = sorted(list(set([r['class_name'] for r in res])))
@@ -200,6 +196,7 @@ if role == "teacher":
             nc_period = c2.selectbox("Period:", [str(i) for i in range(1,9)], key="nc_p")
             if st.button("Initialize Class"):
                 try:
+                    # Explicitly omit 'id' so Supabase doesn't conflict on auto-incrementing PKey
                     supabase.table("rosters").upsert({
                         "teacher_name": user_fullname, "class_name": nc_name, 
                         "period": str(nc_period), "student_name": "_Admin_"
@@ -236,16 +233,23 @@ if role == "teacher":
             if st.button("🚀 Push to Students"):
                 try:
                     payload = {
-                        "class_name": sel_class, "period": str(sel_period), 
-                        "task_description": new_desc, "goal_input": gi, "expected_output": go
+                        "class_name": sel_class, 
+                        "period": str(sel_period), 
+                        "task_description": new_desc, 
+                        "goal_input": gi, 
+                        "expected_output": go
                     }
+                    # If current_task has an 'id' column as PKey, we must include it or handle correctly.
+                    # We attempt to upsert based on the unique combo of class/period.
+                    if task.get("id"):
+                        payload["id"] = task["id"]
+                    
                     supabase.table("current_task").upsert(payload, on_conflict="class_name, period").execute()
                     st.success("Assignment Updated!")
                     time.sleep(0.5)
                     st.rerun()
                 except Exception as e:
-                    st.error("Database Save Failed.")
-                    st.exception(e)
+                    st.error(f"Database Save Failed: {e}")
 
 else: # STUDENT VIEW
     st.title(f"🚀 {sel_class} - P{sel_period}")
