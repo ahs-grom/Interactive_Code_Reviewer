@@ -138,26 +138,28 @@ else: # STUDENT VIEW
     if current_task.get('task_description'):
         st.markdown(current_task['task_description'])
     
-    # Restored the internal button with explicit parameters
+    # Corrected button configuration: Properly positioned and wired to send the "submit" command
     editor_btns = [{
-        "name": "Submit",
+        "name": "Run & Submit",
         "feather": "Play",
         "primary": True,
         "hasText": True,
-        "show_name": True
+        "showWithIcon": True,
+        "commands": ["submit"],
+        "style": {"bottom": "15px", "right": "15px", "position": "absolute"}
     }]
     
-    # Removed the hardcoded default text and added a stable unique key
     response = code_editor("", lang="python", buttons=editor_btns, key="student_editor_instance")
     
-    # Listen strictly for the internal button click
-    if response and response.get("type") == "Submit":
+    # Check explicitly for the "submit" command triggered by our custom button
+    if response and response.get("type") == "submit":
         code = response.get("text", "")
         
         if not code.strip():
             st.warning("Please write some code before submitting.")
         else:
-            with st.spinner("Testing code..."):
+            # This spinner provides the immediate visual feedback you rightfully expected
+            with st.spinner("Executing code & updating database..."):
                 try:
                     # Sandbox Logic
                     sb_res = requests.post(
