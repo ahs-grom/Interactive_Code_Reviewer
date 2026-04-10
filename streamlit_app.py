@@ -4,6 +4,7 @@ import pandas as pd
 import time
 from supabase import create_client
 from streamlit_autorefresh import st_autorefresh
+from code_editor import code_editor  # <-- New Import
 
 # --- 1. INITIALIZATION ---
 st.set_page_config(page_title="CodeMaster LMS", layout="wide")
@@ -119,12 +120,7 @@ if role == "teacher":
             merged = pd.merge(r_df, s_df, left_on='student_name', right_on='name', how='left')
             merged = merged.sort_values(by='created_at', ascending=True, na_position='last')
             
-            # Formatting logic pass
-            if not merged['created_at'].isna().all():
-                merged['Time'] = merged['created_at'].dt.strftime('%H:%M:%S').fillna("--")
-            else:
-                merged['Time'] = "--"
-            
+            merged['Time'] = merged['created_at'].dt.strftime('%H:%M:%S').fillna("--") if not merged['created_at'].isna().all() else "--"
             merged['status'] = merged['status'].fillna("NOT SUBMITTED ⚪")
             
             def style_status(val):
@@ -133,7 +129,7 @@ if role == "teacher":
 
             st.dataframe(
                 merged[['student_name', 'Time', 'status']].style.map(style_status, subset=['status']), 
-                column_config={"student_name": "Student", "Time": st.column_config.TextColumn("Time", width="small"), "status": "Status"},
+                column_config={"student_name": "Student", "Time": "Time", "status": "Status"},
                 width="stretch", hide_index=True
             )
             
@@ -160,9 +156,11 @@ if role == "teacher":
             nc_period = c2.selectbox("Period:", [str(i) for i in range(1,9)], key="nc_p")
             if st.button("Initialize Class"):
                 try:
-                    supabase.table("rosters").upsert({"teacher_name": user_fullname, "class_name": nc_name, "period": nc_period, "student_name": "_Admin_"}, on_conflict="class_name, period, student_name").execute()
-                    st.success("Initialized!")
-                    time.sleep(0.5); st.rerun()
+                    supabase.table("rosters").upsert({
+                        "teacher_name": user_fullname, "class_name": nc_name, 
+                        "period": nc_period, "student_name": "_Admin_"
+                    }, on_conflict="class_name, period, student_name").execute()
+                    st.success("Initialized!"); time.sleep(0.5); st.rerun()
                 except Exception as e: st.error(f"Error: {e}")
 
         with st.expander("👤 Register Student"):
@@ -184,14 +182,14 @@ if role == "teacher":
             go = cb.text_input("Expected Output:", value=task['expected_output'])
             if st.button("🚀 Push to Students"):
                 try:
-                    supabase.table("current_task").upsert({
+                    payload = {
                         "class_name": sel_class, "period": str(sel_period), 
                         "task_description": new_desc, "goal_input": gi, "expected_output": go
-                    }, on_conflict="class_name, period").execute()
+                    }
+                    supabase.table("current_task").upsert(payload, on_conflict="class_name, period").execute()
                     st.success("Assignment Updated!"); time.sleep(0.5); st.rerun()
                 except Exception as e:
                     st.error("Database Save Failed.")
-                    st.warning("If RLS is enabled in Supabase, you must add a Policy to allow access.")
                     st.exception(e)
 
 else: # STUDENT VIEW
@@ -201,15 +199,35 @@ else: # STUDENT VIEW
             st.markdown(task['task_description'])
             st.caption(f"Input: `{task['goal_input']}` | Expected: `{task['expected_output']}`")
     
-    code_input = st.text_area("Python Editor:", height=400, key="std_editor")
+    # --- UPDATED: Advanced Code Editor ---
+    st.write("### Python Editor")
+    response = code_editor(
+        "", 
+        lang="python", 
+        theme="monokai", 
+        height=[15, 30], # Min lines, Max lines
+        options={"tabSize": 4} # 👈 This enables the Tab key functionality
+    )
+    
+    # code_editor returns a dict; 'text' contains the string
+    code_input = response.get("text", "")
+
     if st.button("🚀 Run & Submit"):
-        status, output = run_code_in_sandbox(code_input, task['goal_input'])
-        clean_out, clean_target = str(output).replace(" ", "").strip(), str(task['expected_output']).replace(" ", "").strip()
-        f_status = "PASSED ✅" if (status == "SUCCESS" and clean_out == clean_target) else status
-        if status == "SUCCESS" and clean_out != clean_target: f_status = "WRONG OUTPUT ❌"
-        
-        try:
-            supabase.table("submissions").upsert({"name": user_fullname, "class_name": sel_class, "period": str(sel_period), "code": code_input, "status": f_status, "output": str(output)}, on_conflict="name, class_name, period").execute()
-            st.info(f"Result: {f_status}")
-        except Exception as e:
-            st.error("Submission failed. Database may be locked by RLS.")
+        if not code_input:
+            st.warning("Editor is empty!")
+        else:
+            status, output = run_code_in_sandbox(code_input, task['goal_input'])
+            clean_out, clean_target = str(output).replace(" ", "").strip(), str(task['expected_output']).replace(" ", "").strip()
+            f_status = "PASSED ✅" if (status == "SUCCESS" and clean_out == clean_target) else status
+            if status == "SUCCESS" and clean_out != clean_target: f_status = "WRONG OUTPUT ❌"
+            
+            try:
+                sub_payload = {
+                    "name": user_fullname, "class_name": sel_class, "period": str(sel_period), 
+                    "code": code_input, "status": f_status, "output": str(output)
+                }
+                supabase.table("submissions").upsert(sub_payload, on_conflict="name, class_name, period").execute()
+                st.info(f"Result: {f_status}")
+            except Exception as e:
+                st.error("Submission failed.")
+                st.exception(e)
