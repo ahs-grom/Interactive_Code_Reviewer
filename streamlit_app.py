@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import time
+from datetime import datetime, timezone
 from supabase import create_client
 from streamlit_autorefresh import st_autorefresh
 from code_editor import code_editor
@@ -95,14 +96,44 @@ current_task = get_task()
 
 # --- 5. MAIN INTERFACE ---
 if role == "teacher":
-    st_autorefresh(interval=30000, key="datarefresh")
+    # Refreshes exactly every 20 seconds to prevent chaotic updates
+    st_autorefresh(interval=20000, key="datarefresh")
     t1, t2 = st.tabs(["🏆 Leaderboard", "⚙️ Setup"])
     
     with t1:
         st.subheader(f"Dashboard: {sel_class} P{sel_period}")
         subs = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
+        
         if subs:
-            st.dataframe(pd.DataFrame(subs)[['name', 'status', 'code', 'output']], hide_index=True)
+            df = pd.DataFrame(subs)
+            
+            # Sort primarily by updated_at so recent submissions drop to the bottom
+            if 'updated_at' in df.columns:
+                df['updated_at'] = pd.to_datetime(df['updated_at'])
+                df = df.sort_values('updated_at', ascending=True).reset_index(drop=True)
+            elif 'created_at' in df.columns:
+                df['created_at'] = pd.to_datetime(df['created_at'])
+                df = df.sort_values('created_at', ascending=True).reset_index(drop=True)
+            elif 'id' in df.columns:
+                df = df.sort_values('id', ascending=True).reset_index(drop=True)
+            
+            display_df = df[['name', 'status', 'output']]
+            
+            # Clean leaderboard table with click-to-select enabled
+            selection_event = st.dataframe(
+                display_df, 
+                hide_index=True, 
+                use_container_width=True,
+                on_select="rerun",
+                selection_mode="single-row"
+            )
+            
+            # Only display the code block if a student's row is clicked
+            if selection_event.selection.rows:
+                selected_idx = selection_event.selection.rows[0]
+                selected_student = df.iloc[selected_idx]
+                st.markdown(f"### 💻 Code: {selected_student['name']}")
+                st.code(selected_student['code'], language="python")
         else:
             st.info("No submissions yet.")
 
@@ -138,7 +169,6 @@ else: # STUDENT VIEW
     if current_task.get('task_description'):
         st.markdown(current_task['task_description'])
     
-    # Corrected button configuration: Properly positioned and wired to send the "submit" command
     editor_btns = [{
         "name": "Run & Submit",
         "feather": "Play",
@@ -151,17 +181,14 @@ else: # STUDENT VIEW
     
     response = code_editor("", lang="python", buttons=editor_btns, key="student_editor_instance")
     
-    # Check explicitly for the "submit" command triggered by our custom button
     if response and response.get("type") == "submit":
         code = response.get("text", "")
         
         if not code.strip():
             st.warning("Please write some code before submitting.")
         else:
-            # This spinner provides the immediate visual feedback you rightfully expected
             with st.spinner("Executing code & updating database..."):
                 try:
-                    # Sandbox Logic
                     sb_res = requests.post(
                         f"{PUBLIC_MIRROR}/submissions?wait=true", 
                         json={"source_code": code, "language_id": 71, "stdin": str(current_task.get('goal_input', ''))}, 
@@ -177,14 +204,15 @@ else: # STUDENT VIEW
                     if sb_res.get("stderr"): 
                         status = "RUNTIME ERROR ⚠️"
                     
-                    # Database Logic
+                    # Force updated_at to the exact second of submission
                     sub_payload = {
                         "name": user_fullname, 
                         "class_name": sel_class, 
                         "period": str(sel_period),
                         "code": code, 
                         "status": status, 
-                        "output": actual
+                        "output": actual,
+                        "updated_at": datetime.now(timezone.utc).isoformat()
                     }
                     
                     existing_sub = supabase.table("submissions").select("*").eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
