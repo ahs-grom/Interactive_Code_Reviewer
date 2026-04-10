@@ -3,3 +3,4 @@ supabase
 requests
 pandas
 streamlit_autorefresh
+streamlit-code-editor
