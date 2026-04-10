@@ -96,30 +96,52 @@ current_task = get_task()
 
 # --- 5. MAIN INTERFACE ---
 if role == "teacher":
-    # Refreshes exactly every 20 seconds to prevent chaotic updates
     st_autorefresh(interval=20000, key="datarefresh")
     t1, t2 = st.tabs(["🏆 Leaderboard", "⚙️ Setup"])
     
     with t1:
         st.subheader(f"Dashboard: {sel_class} P{sel_period}")
-        subs = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
         
-        if subs:
-            df = pd.DataFrame(subs)
+        roster_data = supabase.table("rosters").select("student_name").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
+        
+        if roster_data:
+            roster_df = pd.DataFrame(roster_data).rename(columns={"student_name": "name"})
+            subs = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
             
-            # Sort primarily by updated_at so recent submissions drop to the bottom
+            if subs:
+                subs_df = pd.DataFrame(subs)
+                df = pd.merge(roster_df, subs_df, on="name", how="left")
+            else:
+                df = roster_df.copy()
+                df['status'] = None
+                df['output'] = None
+                df['code'] = None
+                df['updated_at'] = pd.NaT
+            
+            df['status'] = df['status'].fillna("Not Started ⏳")
+            df['output'] = df['output'].fillna("")
+            df['code'] = df['code'].fillna("")
+            
+            # Leaderboard Sorting Logic
+            status_rank = {
+                "PASSED ✅": 1,
+                "WRONG OUTPUT ❌": 2,
+                "RUNTIME ERROR ⚠️": 2,
+                "Not Started ⏳": 3
+            }
+            # Map the rank, defaulting to 4 if something weird happens
+            df['rank'] = df['status'].map(status_rank).fillna(4)
+            
             if 'updated_at' in df.columns:
-                df['updated_at'] = pd.to_datetime(df['updated_at'])
-                df = df.sort_values('updated_at', ascending=True).reset_index(drop=True)
-            elif 'created_at' in df.columns:
-                df['created_at'] = pd.to_datetime(df['created_at'])
-                df = df.sort_values('created_at', ascending=True).reset_index(drop=True)
-            elif 'id' in df.columns:
-                df = df.sort_values('id', ascending=True).reset_index(drop=True)
+                df['updated_at'] = pd.to_datetime(df['updated_at'], errors='coerce')
+            else:
+                df['updated_at'] = pd.NaT
+            
+            # Sort by rank first (Passed at top), then by earliest completion time, then alphabetically by name
+            df = df.sort_values(by=['rank', 'updated_at', 'name'], ascending=[True, True, True]).reset_index(drop=True)
             
             display_df = df[['name', 'status', 'output']]
             
-            # Clean leaderboard table with click-to-select enabled
             selection_event = st.dataframe(
                 display_df, 
                 hide_index=True, 
@@ -128,14 +150,18 @@ if role == "teacher":
                 selection_mode="single-row"
             )
             
-            # Only display the code block if a student's row is clicked
             if selection_event.selection.rows:
                 selected_idx = selection_event.selection.rows[0]
                 selected_student = df.iloc[selected_idx]
+                
                 st.markdown(f"### 💻 Code: {selected_student['name']}")
-                st.code(selected_student['code'], language="python")
+                
+                if selected_student['status'] == "Not Started ⏳":
+                    st.info("This student has not submitted any code yet.")
+                else:
+                    st.code(selected_student['code'], language="python")
         else:
-            st.info("No submissions yet.")
+            st.info("No students found in the roster for this class/period.")
 
     with t2:
         with st.form("task_setup"):
@@ -204,7 +230,6 @@ else: # STUDENT VIEW
                     if sb_res.get("stderr"): 
                         status = "RUNTIME ERROR ⚠️"
                     
-                    # Force updated_at to the exact second of submission
                     sub_payload = {
                         "name": user_fullname, 
                         "class_name": sel_class, 
