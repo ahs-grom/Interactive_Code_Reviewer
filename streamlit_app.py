@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import time
+import re
 from datetime import datetime, timezone
 from supabase import create_client
 from streamlit_autorefresh import st_autorefresh
@@ -30,6 +31,30 @@ except Exception:
     st.stop()
 
 PUBLIC_MIRROR = "https://ce.judge0.com" 
+
+# --- HELPER FUNCTION: PARSE ERRORS ---
+def format_python_error(err_text):
+    """Strips ugly tracebacks into a clean student-friendly format."""
+    if not err_text: return ""
+    
+    lines = err_text.strip().split('\n')
+    line_num = "Unknown"
+    code_snippet = ""
+    error_msg = lines[-1].strip() # The actual error type/message is almost always the last line
+    
+    for i, line in enumerate(lines):
+        # Look for the standard Python traceback line indicator
+        match = re.search(r'File ".*?", line (\d+)', line)
+        if match:
+            line_num = match.group(1)
+            # The next line in the traceback is usually the offending code
+            if i + 1 < len(lines):
+                code_snippet = lines[i+1].strip()
+                
+    if line_num != "Unknown":
+        return f"Line {line_num}:  {code_snippet}\n{error_msg}"
+        
+    return err_text # Fallback to raw text if it's an unusual error format
 
 # --- 2. AUTHENTICATION UI ---
 def login_ui():
@@ -237,37 +262,4 @@ else: # STUDENT VIEW
                     
                     status = "PASSED ✅" if actual == target else "WRONG OUTPUT ❌"
                     if error_output: 
-                        status = "RUNTIME ERROR ⚠️"
-                    
-                    sub_payload = {
-                        "name": user_fullname, 
-                        "class_name": sel_class, 
-                        "period": str(sel_period),
-                        "code": code, 
-                        "status": status, 
-                        "output": actual,
-                        "updated_at": datetime.now(timezone.utc).isoformat()
-                    }
-                    
-                    existing_sub = supabase.table("submissions").select("*").eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
-                    
-                    if existing_sub:
-                        supabase.table("submissions").update(sub_payload).eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute()
-                    else:
-                        supabase.table("submissions").insert(sub_payload).execute()
-                        
-                    st.success(f"Result: {status}")
-                    
-                    # --- DISPLAY EXECUTION OUTPUT TO STUDENT ---
-                    st.markdown("### 🖥️ Execution Output")
-                    if actual:
-                        st.code(actual, language="text")
-                    elif not error_output:
-                        st.info("No standard output produced.")
-                        
-                    if error_output:
-                        st.markdown("### ⚠️ Error Messages")
-                        st.error(error_output)
-                    
-                except Exception as e:
-                    st.error(f"Execution Error: {e}")
+                        status = "RUNTIME ERROR ⚠️
