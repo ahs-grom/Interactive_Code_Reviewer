@@ -9,7 +9,6 @@ from code_editor import code_editor
 # --- 1. INITIALIZATION & PERSISTENCE ---
 st.set_page_config(page_title="CodeMaster LMS", layout="wide")
 
-# Persistent Login Logic
 if "authenticated" not in st.session_state:
     if st.query_params.get("user_email"):
         st.session_state.authenticated = True
@@ -109,11 +108,13 @@ with st.sidebar:
 def get_task():
     try:
         res = supabase.table("current_task").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
-        return res[0] if res else {"goal_input": "", "expected_output": "", "task_description": ""}
+        return res[0] if res else None
     except Exception:
-        return {"goal_input": "", "expected_output": "", "task_description": ""}
+        return None
 
-task = get_task()
+task_record = get_task()
+# Normalize for display
+task_display = task_record if task_record else {"goal_input": "", "expected_output": "", "task_description": ""}
 
 # --- 5. MAIN INTERFACE ---
 if role == "teacher":
@@ -132,9 +133,9 @@ if role == "teacher":
     with t2:
         st.header("Assignment Configuration")
         with st.form("teacher_task_form"):
-            new_desc = st.text_area("Instructions:", value=task.get('task_description', ''))
-            gi = st.text_input("Expected Input:", value=task.get('goal_input', ''))
-            go = st.text_input("Expected Output:", value=task.get('expected_output', ''))
+            new_desc = st.text_area("Instructions:", value=task_display.get('task_description', ''))
+            gi = st.text_input("Expected Input:", value=task_display.get('goal_input', ''))
+            go = st.text_input("Expected Output:", value=task_display.get('expected_output', ''))
             
             if st.form_submit_button("🚀 Update Assignment"):
                 payload = {
@@ -145,11 +146,13 @@ if role == "teacher":
                     "expected_output": go
                 }
                 try:
-                    # We check for an existing task ID to avoid UPSERT conflicts
-                    existing_id = task.get("id")
-                    if existing_id:
-                        supabase.table("current_task").update(payload).eq("id", existing_id).execute()
+                    # Logic: Try to update based on class/period first. 
+                    # If no rows affected, then insert.
+                    check = supabase.table("current_task").select("id").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
+                    if check:
+                        supabase.table("current_task").update(payload).eq("id", check[0]['id']).execute()
                     else:
+                        # Omit ID entirely to let DB handle auto-incrementing
                         supabase.table("current_task").insert(payload).execute()
                     st.success("Task Updated!")
                     time.sleep(0.5)
@@ -159,9 +162,9 @@ if role == "teacher":
 
 else: # STUDENT VIEW
     st.title(f"🚀 {sel_class} - P{sel_period}")
-    if task.get('task_description'):
-        st.markdown(task['task_description'])
-        st.caption(f"Input: `{task.get('goal_input')}` | Expected: `{task.get('expected_output')}`")
+    if task_display.get('task_description'):
+        st.markdown(task_display['task_description'])
+        st.caption(f"Input: `{task_display.get('goal_input')}` | Expected: `{task_display.get('expected_output')}`")
     
     btns = [{"name": "Run & Submit", "feather": "Play", "primary": True, "show_name": True, "always_on": True}]
     response = code_editor("# Write code here...", lang="python", theme="monokai", buttons=btns)
@@ -169,15 +172,14 @@ else: # STUDENT VIEW
     if response.get("type") == "submit" and response.get("text"):
         code_input = response["text"]
         with st.spinner("Testing..."):
-            status, output = run_code_in_sandbox(code_input, task.get('goal_input', ''))
+            status, output = run_code_in_sandbox(code_input, task_display.get('goal_input', ''))
         
         c_out = str(output).replace(" ", "").strip()
-        c_target = str(task.get('expected_output', '')).replace(" ", "").strip()
+        c_target = str(task_display.get('expected_output', '')).replace(" ", "").strip()
         f_status = "PASSED ✅" if (status == "SUCCESS" and c_out == c_target) else "FAILED ❌"
         
         try:
             sub_payload = {"name": user_fullname, "class_name": sel_class, "period": str(sel_period), "code": code_input, "status": f_status, "output": str(output)}
-            # Find existing submission to update or insert new
             existing_sub = supabase.table("submissions").select("id").eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
             if existing_sub:
                 supabase.table("submissions").update(sub_payload).eq("id", existing_sub[0]['id']).execute()
