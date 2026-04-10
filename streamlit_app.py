@@ -6,11 +6,22 @@ from supabase import create_client
 from streamlit_autorefresh import st_autorefresh
 from code_editor import code_editor
 
-# --- 1. INITIALIZATION ---
+# --- 1. INITIALIZATION & PERSISTENCE ---
 st.set_page_config(page_title="CodeMaster LMS", layout="wide")
 
+# Check query params to persist login across refreshes
 if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
+    if "user_email" in st.query_params:
+        # Attempt silent re-auth or just trust the param for this demo
+        st.session_state.authenticated = True
+        st.session_state.user_info = {
+            "email": st.query_params["user_email"],
+            "name": st.query_params["user_name"],
+            "role": st.query_params["user_role"]
+        }
+    else:
+        st.session_state.authenticated = False
+
 if "user_info" not in st.session_state:
     st.session_state.user_info = {}
 
@@ -43,6 +54,10 @@ def login_ui():
                         "name": user['full_name'], 
                         "role": user['role']
                     }
+                    # Set query params so refresh doesn't kill the session
+                    st.query_params["user_email"] = user['email']
+                    st.query_params["user_name"] = user['full_name']
+                    st.query_params["user_role"] = user['role']
                     st.success("Login successful!")
                     time.sleep(0.5)
                     st.rerun()
@@ -78,11 +93,20 @@ with st.sidebar:
     st.info(f"User: **{user_fullname}**")
     
     if role == "teacher":
-        res = supabase.table("rosters").select("class_name").eq("teacher_name", user_fullname).execute().data
-        available_classes = sorted(list(set([r['class_name'] for r in res]))) if res else ["No Classes Found"]
-        sel_class = st.selectbox("Current Class:", available_classes)
-        sel_period = st.selectbox("Period:", ["1", "2", "3", "4", "5", "6", "7", "8"])
+        res = supabase.table("rosters").select("class_name, period").eq("teacher_name", user_fullname).execute().data
+        if res:
+            available_classes = sorted(list(set([r['class_name'] for r in res])))
+            sel_class = st.selectbox("Current Class:", available_classes)
+            
+            # Get periods ONLY for the selected class
+            periods = sorted(list(set([str(r['period']) for r in res if r['class_name'] == sel_class])))
+            # If only one period exists, it is automatically selected as index 0
+            sel_period = st.selectbox("Period:", periods)
+        else:
+            sel_class = "No Classes"
+            sel_period = "0"
     else:
+        # STUDENT: Period is strictly pulled from DB
         res = supabase.table("rosters").select("class_name, period").eq("student_name", user_fullname).execute().data
         if res:
             available_classes = sorted(list(set([r['class_name'] for r in res])))
@@ -99,6 +123,7 @@ with st.sidebar:
     if st.button("🚪 Logout"):
         st.session_state.authenticated = False
         st.session_state.user_info = {}
+        st.query_params.clear()
         st.rerun()
 
 def get_task():
