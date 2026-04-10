@@ -138,14 +138,23 @@ else: # STUDENT VIEW
     if current_task.get('task_description'):
         st.markdown(current_task['task_description'])
     
-    # Plain code editor. No custom buttons to break.
-    response = code_editor("# Write Python here...", lang="python")
+    # Restored the internal button with explicit parameters
+    editor_btns = [{
+        "name": "Submit",
+        "feather": "Play",
+        "primary": True,
+        "hasText": True,
+        "show_name": True
+    }]
     
-    # Native Streamlit button. Bulletproof.
-    if st.button("🚀 Run & Submit", type="primary"):
+    # Removed the hardcoded default text and added a stable unique key
+    response = code_editor("", lang="python", buttons=editor_btns, key="student_editor_instance")
+    
+    # Listen strictly for the internal button click
+    if response and response.get("type") == "Submit":
         code = response.get("text", "")
         
-        if not code.strip() or code.strip() == "# Write Python here...":
+        if not code.strip():
             st.warning("Please write some code before submitting.")
         else:
             with st.spinner("Testing code..."):
