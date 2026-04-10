@@ -232,7 +232,6 @@ else: # STUDENT VIEW
     
     st.write("### Python Editor")
     
-    # Updated: Added 'buttons' to force the component to update state on click
     custom_btns = [{
         "name": "Submit Code",
         "feather": "Play",
@@ -250,7 +249,6 @@ else: # STUDENT VIEW
         options={"tabSize": 4}
     )
     
-    # We pull from response['text'] which is populated when the button is clicked
     code_input = response.get("text", "")
 
     if st.button("🚀 Run & Submit"):
@@ -269,4 +267,18 @@ else: # STUDENT VIEW
             
             try:
                 sub_payload = {
-                    "name": user_fullname, "class_name": sel_class
+                    "name": user_fullname, 
+                    "class_name": sel_class, 
+                    "period": str(sel_period), 
+                    "code": code_input, 
+                    "status": f_status, 
+                    "output": str(output)
+                }
+                supabase.table("submissions").upsert(sub_payload, on_conflict="name, class_name, period").execute()
+                if "PASSED" in f_status: 
+                    st.success(f"Result: {f_status}")
+                else: 
+                    st.warning(f"Result: {f_status}")
+            except Exception as e:
+                st.error("Submission failed.")
+                st.exception(e)
