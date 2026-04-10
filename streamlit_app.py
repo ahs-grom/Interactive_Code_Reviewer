@@ -83,7 +83,6 @@ with st.sidebar:
         sel_class = st.selectbox("Current Class:", available_classes)
         sel_period = st.selectbox("Period:", ["1", "2", "3", "4", "5", "6", "7", "8"])
     else:
-        # STUDENT: Period is strictly pulled from DB, no selection allowed
         res = supabase.table("rosters").select("class_name, period").eq("student_name", user_fullname).execute().data
         if res:
             available_classes = sorted(list(set([r['class_name'] for r in res])))
@@ -232,19 +231,31 @@ else: # STUDENT VIEW
             st.caption(f"Input: `{task.get('goal_input', '')}` | Expected: `{task.get('expected_output', '')}`")
     
     st.write("### Python Editor")
+    
+    # Updated: Added 'buttons' to force the component to update state on click
+    custom_btns = [{
+        "name": "Submit Code",
+        "feather": "Play",
+        "primary": True,
+        "show_name": True,
+        "always_on": True
+    }]
+    
     response = code_editor(
-        "", 
+        "print('Hello World')", 
         lang="python", 
         theme="monokai", 
         height=[15, 30],
+        buttons=custom_btns,
         options={"tabSize": 4}
     )
     
+    # We pull from response['text'] which is populated when the button is clicked
     code_input = response.get("text", "")
 
     if st.button("🚀 Run & Submit"):
-        if not code_input:
-            st.warning("Editor is empty!")
+        if not code_input or code_input == "print('Hello World')":
+            st.warning("Please write your code and click 'Submit Code' inside the editor first!")
         else:
             with st.spinner("Testing..."):
                 status, output = run_code_in_sandbox(code_input, task.get('goal_input', ''))
@@ -258,14 +269,4 @@ else: # STUDENT VIEW
             
             try:
                 sub_payload = {
-                    "name": user_fullname, "class_name": sel_class, "period": str(sel_period), 
-                    "code": code_input, "status": f_status, "output": str(output)
-                }
-                supabase.table("submissions").upsert(sub_payload, on_conflict="name, class_name, period").execute()
-                if "PASSED" in f_status: 
-                    st.success(f"Result: {f_status}")
-                else: 
-                    st.warning(f"Result: {f_status}")
-            except Exception as e:
-                st.error("Submission failed.")
-                st.exception(e)
+                    "name": user_fullname, "class_name": sel_class
