@@ -102,7 +102,8 @@ if role == "teacher":
         st.subheader(f"Dashboard: {sel_class} P{sel_period}")
         subs = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
         if subs:
-            st.dataframe(pd.DataFrame(subs)[['name', 'status', 'output']], hide_index=True)
+            # RESTORED THE CODE COLUMN HERE
+            st.dataframe(pd.DataFrame(subs)[['name', 'status', 'code', 'output']], hide_index=True)
         else:
             st.info("No submissions yet.")
 
@@ -121,13 +122,10 @@ if role == "teacher":
                     existing = supabase.table("current_task").select("id").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
                     
                     if existing:
-                        # Update existing record
                         supabase.table("current_task").update(payload).eq("id", existing[0]['id']).execute()
                     else:
-                        # BULLETPROOF INSERT: Manually calculate the next ID to bypass the database's broken counter
                         highest = supabase.table("current_task").select("id").order("id", desc=True).limit(1).execute().data
                         payload["id"] = highest[0]['id'] + 1 if highest else 1
-                        
                         supabase.table("current_task").insert(payload).execute()
                         
                     st.success("Updated!")
@@ -168,7 +166,6 @@ else: # STUDENT VIEW
             existing_sub = supabase.table("submissions").select("*").eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
             
             if existing_sub:
-                # Submissions has no ID column, so we use the specific columns as criteria
                 supabase.table("submissions").update(sub_payload).eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute()
             else:
                 supabase.table("submissions").insert(sub_payload).execute()
