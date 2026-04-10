@@ -113,7 +113,6 @@ def get_task():
         return None
 
 task_record = get_task()
-# Normalize for display
 task_display = task_record if task_record else {"goal_input": "", "expected_output": "", "task_description": ""}
 
 # --- 5. MAIN INTERFACE ---
@@ -138,22 +137,22 @@ if role == "teacher":
             go = st.text_input("Expected Output:", value=task_display.get('expected_output', ''))
             
             if st.form_submit_button("🚀 Update Assignment"):
-                payload = {
-                    "class_name": sel_class,
-                    "period": str(sel_period),
-                    "task_description": new_desc,
-                    "goal_input": gi,
-                    "expected_output": go
-                }
                 try:
-                    # Logic: Try to update based on class/period first. 
-                    # If no rows affected, then insert.
-                    check = supabase.table("current_task").select("id").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
-                    if check:
-                        supabase.table("current_task").update(payload).eq("id", check[0]['id']).execute()
-                    else:
-                        # Omit ID entirely to let DB handle auto-incrementing
-                        supabase.table("current_task").insert(payload).execute()
+                    # STEP 1: Delete any existing task for this specific class/period
+                    # This clears the way so we don't have to worry about ID conflicts.
+                    supabase.table("current_task").delete().eq("class_name", sel_class).eq("period", str(sel_period)).execute()
+                    
+                    # STEP 2: Insert the fresh task. 
+                    # We do NOT send an ID. The database will pick the next valid available ID.
+                    payload = {
+                        "class_name": sel_class,
+                        "period": str(sel_period),
+                        "task_description": new_desc,
+                        "goal_input": gi,
+                        "expected_output": go
+                    }
+                    supabase.table("current_task").insert(payload).execute()
+                    
                     st.success("Task Updated!")
                     time.sleep(0.5)
                     st.rerun()
@@ -179,12 +178,18 @@ else: # STUDENT VIEW
         f_status = "PASSED ✅" if (status == "SUCCESS" and c_out == c_target) else "FAILED ❌"
         
         try:
-            sub_payload = {"name": user_fullname, "class_name": sel_class, "period": str(sel_period), "code": code_input, "status": f_status, "output": str(output)}
-            existing_sub = supabase.table("submissions").select("id").eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
-            if existing_sub:
-                supabase.table("submissions").update(sub_payload).eq("id", existing_sub[0]['id']).execute()
-            else:
-                supabase.table("submissions").insert(sub_payload).execute()
+            # Similar logic for students: Delete old submission and insert new to avoid ID issues
+            supabase.table("submissions").delete().eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute()
+            
+            sub_payload = {
+                "name": user_fullname, 
+                "class_name": sel_class, 
+                "period": str(sel_period), 
+                "code": code_input, 
+                "status": f_status, 
+                "output": str(output)
+            }
+            supabase.table("submissions").insert(sub_payload).execute()
             st.success(f"Graded: {f_status}")
         except Exception as e:
             st.error(f"Submission Error: {e}")
