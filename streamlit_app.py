@@ -4,7 +4,7 @@ import pandas as pd
 import time
 from supabase import create_client
 from streamlit_autorefresh import st_autorefresh
-from code_editor import code_editor  # <-- New Import
+from code_editor import code_editor
 
 # --- 1. INITIALIZATION ---
 st.set_page_config(page_title="CodeMaster LMS", layout="wide")
@@ -38,7 +38,11 @@ def login_ui():
                 if res:
                     user = res[0]
                     st.session_state.authenticated = True
-                    st.session_state.user_info = {"email": user['email'], "name": user['full_name'], "role": user['role']}
+                    st.session_state.user_info = {
+                        "email": user['email'], 
+                        "name": user['full_name'], 
+                        "role": user['role']
+                    }
                     st.success("Login successful!")
                     time.sleep(0.5)
                     st.rerun()
@@ -67,19 +71,34 @@ def run_code_in_sandbox(code, test_input):
     except Exception:
         return "CONN_ERR", "Offline"
 
-# --- 4. SIDEBAR ---
+# --- 4. SIDEBAR & LOGIC ---
 with st.sidebar:
     st.header(f"👋 {role.title()} Portal")
     st.info(f"User: **{user_fullname}**")
     
+    # Logic to handle Roster queries
     if role == "teacher":
         res = supabase.table("rosters").select("class_name").eq("teacher_name", user_fullname).execute().data
+        available_classes = sorted(list(set([r['class_name'] for r in res]))) if res else ["No Classes Found"]
+        sel_class = st.selectbox("Current Class:", available_classes)
+        # TEACHERS can still choose the period
+        sel_period = st.selectbox("Period:", ["1", "2", "3", "4", "5", "6", "7", "8"])
     else:
-        res = supabase.table("rosters").select("class_name").eq("student_name", user_fullname).execute().data
-    
-    available_classes = sorted(list(set([r['class_name'] for r in res]))) if res else ["No Classes Found"]
-    sel_class = st.selectbox("Current Class:", available_classes)
-    sel_period = st.selectbox("Period:", ["1", "2", "3", "4", "5", "6", "7", "8"])
+        # STUDENTS: Fetch their specific class and period from the roster
+        res = supabase.table("rosters").select("class_name, period").eq("student_name", user_fullname).execute().data
+        if res:
+            # If a student is in multiple classes, they can choose the class, but the period is locked to that class entry
+            available_classes = sorted(list(set([r['class_name'] for r in res])))
+            sel_class = st.selectbox("Current Class:", available_classes)
+            
+            # Find the period associated with the selected class for THIS student
+            match = next((item for item in res if item["class_name"] == sel_class), None)
+            sel_period = match["period"] if match else "1"
+            st.success(f"📌 Locked to Period: **{sel_period}**")
+        else:
+            sel_class = "Unassigned"
+            sel_period = "0"
+            st.warning("You are not on any roster.")
     
     st.divider()
     if st.button("🚪 Logout"):
@@ -108,6 +127,9 @@ if role == "teacher":
         
         if roster:
             r_df = pd.DataFrame(roster)
+            # Filter out the admin init record if it exists
+            r_df = r_df[r_df['student_name'] != "_Admin_"]
+            
             if subs:
                 s_df = pd.DataFrame(subs)
                 s_df['created_at'] = pd.to_datetime(s_df['created_at'], errors='coerce')
@@ -115,12 +137,11 @@ if role == "teacher":
                 except Exception: pass
             else:
                 s_df = pd.DataFrame(columns=['name', 'status', 'code', 'output', 'created_at'])
-                s_df['created_at'] = pd.to_datetime(s_df['created_at'])
 
             merged = pd.merge(r_df, s_df, left_on='student_name', right_on='name', how='left')
             merged = merged.sort_values(by='created_at', ascending=True, na_position='last')
             
-            merged['Time'] = merged['created_at'].dt.strftime('%H:%M:%S').fillna("--") if not merged['created_at'].isna().all() else "--"
+            merged['Time'] = merged['created_at'].dt.strftime('%H:%M:%S').fillna("--") if 'created_at' in merged and not merged['created_at'].isna().all() else "--"
             merged['status'] = merged['status'].fillna("NOT SUBMITTED ⚪")
             
             def style_status(val):
@@ -171,7 +192,12 @@ if role == "teacher":
             if st.button("Create Account"):
                 try:
                     supabase.table("users").upsert({"email": reg_email.lower().strip(), "password": reg_pass, "full_name": reg_name, "role": "student"}).execute()
-                    supabase.table("rosters").upsert({"teacher_name": user_fullname, "class_name": sel_class, "period": str(sel_period), "student_name": reg_name}, on_conflict="class_name, period, student_name").execute()
+                    supabase.table("rosters").upsert({
+                        "teacher_name": user_fullname, 
+                        "class_name": sel_class, 
+                        "period": str(sel_period), 
+                        "student_name": reg_name
+                    }, on_conflict="class_name, period, student_name").execute()
                     st.success("Added!"); time.sleep(0.5); st.rerun()
                 except Exception as e: st.error(f"Error: {e}")
 
@@ -194,40 +220,4 @@ if role == "teacher":
 
 else: # STUDENT VIEW
     st.title(f"🚀 {sel_class} - P{sel_period}")
-    if task['task_description']:
-        with st.container(border=True):
-            st.markdown(task['task_description'])
-            st.caption(f"Input: `{task['goal_input']}` | Expected: `{task['expected_output']}`")
-    
-    # --- UPDATED: Advanced Code Editor ---
-    st.write("### Python Editor")
-    response = code_editor(
-        "", 
-        lang="python", 
-        theme="monokai", 
-        height=[15, 30], # Min lines, Max lines
-        options={"tabSize": 4} # 👈 This enables the Tab key functionality
-    )
-    
-    # code_editor returns a dict; 'text' contains the string
-    code_input = response.get("text", "")
-
-    if st.button("🚀 Run & Submit"):
-        if not code_input:
-            st.warning("Editor is empty!")
-        else:
-            status, output = run_code_in_sandbox(code_input, task['goal_input'])
-            clean_out, clean_target = str(output).replace(" ", "").strip(), str(task['expected_output']).replace(" ", "").strip()
-            f_status = "PASSED ✅" if (status == "SUCCESS" and clean_out == clean_target) else status
-            if status == "SUCCESS" and clean_out != clean_target: f_status = "WRONG OUTPUT ❌"
-            
-            try:
-                sub_payload = {
-                    "name": user_fullname, "class_name": sel_class, "period": str(sel_period), 
-                    "code": code_input, "status": f_status, "output": str(output)
-                }
-                supabase.table("submissions").upsert(sub_payload, on_conflict="name, class_name, period").execute()
-                st.info(f"Result: {f_status}")
-            except Exception as e:
-                st.error("Submission failed.")
-                st.exception(e)
+    if task
