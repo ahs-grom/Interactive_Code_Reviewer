@@ -141,8 +141,8 @@ else: # STUDENT VIEW
     
     btns = [{"name": "Submit", "feather": "Play", "primary": True, "show_name": True, "always_on": True}]
     response = code_editor("# Write Python here...", lang="python", buttons=btns)
-    
-    if response.get("type") == "submit" and response.get("text"):
+
+    if str(response.get("type")).lower() == "submit" and response.get("text"):
         code = response["text"]
         try:
             sb_res = requests.post(
