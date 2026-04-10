@@ -262,4 +262,39 @@ else: # STUDENT VIEW
                     
                     status = "PASSED ✅" if actual == target else "WRONG OUTPUT ❌"
                     if error_output: 
-                        status = "RUNTIME ERROR ⚠️
+                        status = "RUNTIME ERROR ⚠️"
+                    
+                    sub_payload = {
+                        "name": user_fullname, 
+                        "class_name": sel_class, 
+                        "period": str(sel_period),
+                        "code": code, 
+                        "status": status, 
+                        "output": actual,
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }
+                    
+                    existing_sub = supabase.table("submissions").select("*").eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
+                    
+                    if existing_sub:
+                        supabase.table("submissions").update(sub_payload).eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute()
+                    else:
+                        supabase.table("submissions").insert(sub_payload).execute()
+                        
+                    st.success(f"Result: {status}")
+                    
+                    # --- DISPLAY EXECUTION OUTPUT TO STUDENT ---
+                    st.markdown("### 🖥️ Execution Output")
+                    if actual:
+                        st.code(actual, language="text")
+                    elif not error_output:
+                        st.info("No standard output produced.")
+                        
+                    if error_output:
+                        st.markdown("### ⚠️ Error Messages")
+                        formatted_err = format_python_error(error_output)
+                        # Using st.error for the red styling, preserving the multiline text
+                        st.error(formatted_err)
+                    
+                except Exception as e:
+                    st.error(f"Execution Error: {e}")
