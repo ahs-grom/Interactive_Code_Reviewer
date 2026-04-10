@@ -220,6 +220,18 @@ else: # STUDENT VIEW
     st.title(f"🚀 {sel_class} - P{sel_period}")
     if current_task.get('task_description'):
         st.markdown(current_task['task_description'])
+        
+    # --- PRESERVE CODE STATE ---
+    # Create a unique session key for the current class/period
+    code_key = f"student_code_{sel_class}_{sel_period}"
+    
+    if code_key not in st.session_state:
+        # Check database for a previous submission if nothing is in session state
+        existing_sub = supabase.table("submissions").select("code").eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
+        if existing_sub:
+            st.session_state[code_key] = existing_sub[0]['code']
+        else:
+            st.session_state[code_key] = ""
     
     editor_btns = [{
         "name": "Run & Submit",
@@ -231,10 +243,14 @@ else: # STUDENT VIEW
         "style": {"bottom": "15px", "right": "15px", "position": "absolute"}
     }]
     
-    response = code_editor("", lang="python", buttons=editor_btns, key="student_editor_instance")
+    # Pre-fill the editor with the preserved code
+    response = code_editor(st.session_state[code_key], lang="python", buttons=editor_btns, key="student_editor_instance")
     
     if response and response.get("type") == "submit":
         code = response.get("text", "")
+        
+        # Save the newest typed code into session state immediately
+        st.session_state[code_key] = code 
         
         if not code.strip():
             st.warning("Please write some code before submitting.")
@@ -275,9 +291,9 @@ else: # STUDENT VIEW
                         "updated_at": datetime.now(timezone.utc).isoformat()
                     }
                     
-                    existing_sub = supabase.table("submissions").select("*").eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
+                    existing_sub_check = supabase.table("submissions").select("*").eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
                     
-                    if existing_sub:
+                    if existing_sub_check:
                         supabase.table("submissions").update(sub_payload).eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute()
                     else:
                         supabase.table("submissions").insert(sub_payload).execute()
@@ -294,7 +310,6 @@ else: # STUDENT VIEW
                     if error_output:
                         st.markdown("### ⚠️ Error Messages")
                         formatted_err = format_python_error(error_output)
-                        # Using st.error for the red styling, preserving the multiline text
                         st.error(formatted_err)
                     
                 except Exception as e:
