@@ -76,29 +76,24 @@ with st.sidebar:
     st.header(f"👋 {role.title()} Portal")
     st.info(f"User: **{user_fullname}**")
     
-    # Logic to handle Roster queries
     if role == "teacher":
         res = supabase.table("rosters").select("class_name").eq("teacher_name", user_fullname).execute().data
         available_classes = sorted(list(set([r['class_name'] for r in res]))) if res else ["No Classes Found"]
         sel_class = st.selectbox("Current Class:", available_classes)
-        # TEACHERS can still choose the period
         sel_period = st.selectbox("Period:", ["1", "2", "3", "4", "5", "6", "7", "8"])
     else:
-        # STUDENTS: Fetch their specific class and period from the roster
+        # STUDENT: Auto-detect period from roster
         res = supabase.table("rosters").select("class_name, period").eq("student_name", user_fullname).execute().data
         if res:
-            # If a student is in multiple classes, they can choose the class, but the period is locked to that class entry
             available_classes = sorted(list(set([r['class_name'] for r in res])))
             sel_class = st.selectbox("Current Class:", available_classes)
-            
-            # Find the period associated with the selected class for THIS student
             match = next((item for item in res if item["class_name"] == sel_class), None)
-            sel_period = match["period"] if match else "1"
+            sel_period = str(match["period"]) if match else "1"
             st.success(f"📌 Locked to Period: **{sel_period}**")
         else:
             sel_class = "Unassigned"
             sel_period = "0"
-            st.warning("You are not on any roster.")
+            st.warning("No roster found.")
     
     st.divider()
     if st.button("🚪 Logout"):
@@ -122,19 +117,20 @@ if role == "teacher":
     
     with tab_leader:
         st.header(f"Dashboard: {sel_class} P{sel_period}")
-        roster = supabase.table("rosters").select("student_name").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
-        subs = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
+        roster_res = supabase.table("rosters").select("student_name").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
+        subs_res = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
         
-        if roster:
-            r_df = pd.DataFrame(roster)
-            # Filter out the admin init record if it exists
+        if roster_res:
+            r_df = pd.DataFrame(roster_res)
             r_df = r_df[r_df['student_name'] != "_Admin_"]
             
-            if subs:
-                s_df = pd.DataFrame(subs)
+            if subs_res:
+                s_df = pd.DataFrame(subs_res)
                 s_df['created_at'] = pd.to_datetime(s_df['created_at'], errors='coerce')
-                try: s_df['created_at'] = s_df['created_at'].dt.tz_convert('US/Eastern')
-                except Exception: pass
+                try: 
+                    s_df['created_at'] = s_df['created_at'].dt.tz_convert('US/Eastern')
+                except Exception: 
+                    pass
             else:
                 s_df = pd.DataFrame(columns=['name', 'status', 'code', 'output', 'created_at'])
 
@@ -179,45 +175,16 @@ if role == "teacher":
                 try:
                     supabase.table("rosters").upsert({
                         "teacher_name": user_fullname, "class_name": nc_name, 
-                        "period": nc_period, "student_name": "_Admin_"
+                        "period": str(nc_period), "student_name": "_Admin_"
                     }, on_conflict="class_name, period, student_name").execute()
-                    st.success("Initialized!"); time.sleep(0.5); st.rerun()
-                except Exception as e: st.error(f"Error: {e}")
+                    st.success("Initialized!")
+                    time.sleep(0.5)
+                    st.rerun()
+                except Exception as e: 
+                    st.error(f"Error: {e}")
 
         with st.expander("👤 Register Student"):
             sc1, sc2 = st.columns(2)
             reg_email = sc1.text_input("Email:")
             reg_name = sc2.text_input("Full Name:")
-            reg_pass = st.text_input("Password:", value="python2026")
-            if st.button("Create Account"):
-                try:
-                    supabase.table("users").upsert({"email": reg_email.lower().strip(), "password": reg_pass, "full_name": reg_name, "role": "student"}).execute()
-                    supabase.table("rosters").upsert({
-                        "teacher_name": user_fullname, 
-                        "class_name": sel_class, 
-                        "period": str(sel_period), 
-                        "student_name": reg_name
-                    }, on_conflict="class_name, period, student_name").execute()
-                    st.success("Added!"); time.sleep(0.5); st.rerun()
-                except Exception as e: st.error(f"Error: {e}")
-
-        with st.expander("🎯 Set Assignment Details"):
-            new_desc = st.text_area("Instructions (Markdown):", value=task['task_description'], height=200)
-            ca, cb = st.columns(2)
-            gi = ca.text_input("Test Input:", value=task['goal_input'])
-            go = cb.text_input("Expected Output:", value=task['expected_output'])
-            if st.button("🚀 Push to Students"):
-                try:
-                    payload = {
-                        "class_name": sel_class, "period": str(sel_period), 
-                        "task_description": new_desc, "goal_input": gi, "expected_output": go
-                    }
-                    supabase.table("current_task").upsert(payload, on_conflict="class_name, period").execute()
-                    st.success("Assignment Updated!"); time.sleep(0.5); st.rerun()
-                except Exception as e:
-                    st.error("Database Save Failed.")
-                    st.exception(e)
-
-else: # STUDENT VIEW
-    st.title(f"🚀 {sel_class} - P{sel_period}")
-    if task
+            reg_pass = st.text_input("Password:", value="python2
