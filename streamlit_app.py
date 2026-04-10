@@ -118,12 +118,18 @@ if role == "teacher":
                     "task_description": new_desc, "goal_input": new_in, "expected_output": new_out
                 }
                 try:
-                    # Safely handle current_task (which has the fixed ID sequence)
                     existing = supabase.table("current_task").select("id").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
+                    
                     if existing:
+                        # Update existing record
                         supabase.table("current_task").update(payload).eq("id", existing[0]['id']).execute()
                     else:
+                        # BULLETPROOF INSERT: Manually calculate the next ID to bypass the database's broken counter
+                        highest = supabase.table("current_task").select("id").order("id", desc=True).limit(1).execute().data
+                        payload["id"] = highest[0]['id'] + 1 if highest else 1
+                        
                         supabase.table("current_task").insert(payload).execute()
+                        
                     st.success("Updated!")
                     time.sleep(0.5)
                     st.rerun()
@@ -159,10 +165,10 @@ else: # STUDENT VIEW
                 "code": code, "status": status, "output": actual
             }
             
-            # Safely handle submissions (which does NOT have an ID)
             existing_sub = supabase.table("submissions").select("*").eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
             
             if existing_sub:
+                # Submissions has no ID column, so we use the specific columns as criteria
                 supabase.table("submissions").update(sub_payload).eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute()
             else:
                 supabase.table("submissions").insert(sub_payload).execute()
