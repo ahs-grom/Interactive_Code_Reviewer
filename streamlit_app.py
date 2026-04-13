@@ -3,14 +3,58 @@ import requests
 import pandas as pd
 import time
 import re
-import personalized_styles
 from datetime import datetime, timezone
 from supabase import create_client
 from streamlit_autorefresh import st_autorefresh
 from code_editor import code_editor
 
 # --- 1. INITIALIZATION & PERSISTENCE ---
-st.set_page_config(page_title="CodeMaster LMS", layout="wide")
+st.set_page_config(page_title="American Heritage LMS", layout="wide", page_icon="🏫")
+
+# --- BRANDING & CSS INJECTION ---
+# Colors: Black (#000000), Dark Tangerine (#fbb215), Dolphin (#74747a), Endeavor (#1d5c9d)
+st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600&family=EB+Garamond:wght@400;600&display=swap');
+
+    /* Body Text - Helvetica */
+    html, body, [class*="css"] {
+        font-family: 'Helvetica', sans-serif;
+    }
+
+    /* Headlines - Garamond in Endeavor Blue */
+    h1, h2, h3, h4, h5, h6 {
+        font-family: 'EB Garamond', 'Times New Roman', serif !important;
+        color: #1d5c9d !important; 
+    }
+
+    /* Custom Accent Text - Dancing Script */
+    .accent-text {
+        font-family: 'Dancing Script', cursive !important;
+        color: #fbb215 !important;
+        font-size: 28px;
+        margin-bottom: 10px;
+    }
+    
+    .sub-accent {
+        color: #74747a !important; /* Dolphin Grey */
+        font-size: 18px;
+        font-weight: bold;
+    }
+
+    /* Button Styling */
+    .stButton>button {
+        background-color: #1d5c9d !important;
+        color: white !important;
+        border: 2px solid #1d5c9d !important;
+    }
+    .stButton>button:hover {
+        background-color: #fbb215 !important;
+        color: #000000 !important;
+        border: 2px solid #fbb215 !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 if "authenticated" not in st.session_state:
     if st.query_params.get("user_email"):
@@ -35,50 +79,51 @@ PUBLIC_MIRROR = "https://ce.judge0.com"
 
 # --- HELPER FUNCTION: PARSE ERRORS ---
 def format_python_error(err_text):
-    """Strips ugly tracebacks into a clean student-friendly format."""
     if not err_text: return ""
-    
     lines = err_text.strip().split('\n')
     line_num = "Unknown"
     code_snippet = ""
-    error_msg = lines[-1].strip() # The actual error type/message is almost always the last line
+    error_msg = lines[-1].strip() 
     
     for i, line in enumerate(lines):
-        # Look for the standard Python traceback line indicator
         match = re.search(r'File ".*?", line (\d+)', line)
         if match:
             line_num = match.group(1)
-            # The next line in the traceback is usually the offending code
             if i + 1 < len(lines):
                 code_snippet = lines[i+1].strip()
                 
     if line_num != "Unknown":
-        # Using double newline so Streamlit's Markdown engine forces a hard break
         return f"Line {line_num}:  {code_snippet}\n\n{error_msg}"
-        
-    return err_text # Fallback to raw text if it's an unusual error format
+    return err_text
 
 # --- 2. AUTHENTICATION UI ---
 def login_ui():
-    st.title("🔐 CodeMaster Secure Login")
-    with st.form("login_form"):
-        email = st.text_input("School Email:").lower().strip()
-        password = st.text_input("Password:", type="password")
-        if st.form_submit_button("Login"):
-            try:
-                res = supabase.table("users").select("*").eq("email", email).eq("password", password).execute().data
-                if res:
-                    user = res[0]
-                    st.session_state.authenticated = True
-                    st.session_state.user_info = {"email": user['email'], "name": user['full_name'], "role": user['role']}
-                    st.query_params["user_email"] = user['email']
-                    st.query_params["user_name"] = user['full_name']
-                    st.query_params["user_role"] = user['role']
-                    st.rerun()
-                else:
-                    st.error("Invalid email or password.")
-            except Exception as e:
-                st.error(f"Auth Error: {e}")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        try:
+            st.image("AHS Horizontal Logo with Motto (Clear_No Background).png", use_container_width=True)
+        except Exception:
+            st.warning("Logo image not found in root directory.")
+            
+        st.markdown("<h1 style='text-align: center;'>Secure Login</h1>", unsafe_allow_html=True)
+        with st.form("login_form"):
+            email = st.text_input("School Email:").lower().strip()
+            password = st.text_input("Password:", type="password")
+            if st.form_submit_button("Login"):
+                try:
+                    res = supabase.table("users").select("*").eq("email", email).eq("password", password).execute().data
+                    if res:
+                        user = res[0]
+                        st.session_state.authenticated = True
+                        st.session_state.user_info = {"email": user['email'], "name": user['full_name'], "role": user['role']}
+                        st.query_params["user_email"] = user['email']
+                        st.query_params["user_name"] = user['full_name']
+                        st.query_params["user_role"] = user['role']
+                        st.rerun()
+                    else:
+                        st.error("Invalid email or password.")
+                except Exception as e:
+                    st.error(f"Auth Error: {e}")
 
 if not st.session_state.get("authenticated"):
     login_ui()
@@ -90,8 +135,14 @@ user_fullname = user_data.get('name', 'User')
 
 # --- 3. SIDEBAR ---
 with st.sidebar:
-    st.header(f"👋 {role.title()} Portal")
-    st.info(f"User: **{user_fullname}**")
+    try:
+        st.image("AHS Emblem (Clear_No Background).jpg", width=150)
+    except Exception:
+        pass # Silently pass if emblem is missing
+        
+    st.markdown(f"<p class='accent-text'>Welcome,</p>", unsafe_allow_html=True)
+    st.markdown(f"**{user_fullname}**<br><span class='sub-accent'>{role.title()} Portal</span>", unsafe_allow_html=True)
+    st.divider()
     
     if role == "teacher":
         res = supabase.table("rosters").select("class_name, period").eq("teacher_name", user_fullname).execute().data
@@ -106,7 +157,8 @@ with st.sidebar:
     else:
         sel_class, sel_period = "Unassigned", "0"
 
-    if st.button("🚪 Logout"):
+    st.divider()
+    if st.button("🚪 Logout", use_container_width=True):
         st.query_params.clear()
         st.session_state.clear()
         st.rerun()
@@ -124,11 +176,11 @@ current_task = get_task()
 # --- 5. MAIN INTERFACE ---
 if role == "teacher":
     st_autorefresh(interval=20000, key="datarefresh")
+    st.title(f"Dashboard: {sel_class} - P{sel_period}")
+    
     t1, t2 = st.tabs(["🏆 Leaderboard", "⚙️ Setup"])
     
     with t1:
-        st.subheader(f"Dashboard: {sel_class} P{sel_period}")
-        
         roster_data = supabase.table("rosters").select("student_name").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
         
         if roster_data:
@@ -149,14 +201,12 @@ if role == "teacher":
             df['output'] = df['output'].fillna("")
             df['code'] = df['code'].fillna("")
             
-            # Leaderboard Sorting Logic
             status_rank = {
                 "PASSED ✅": 1,
                 "WRONG OUTPUT ❌": 2,
                 "RUNTIME ERROR ⚠️": 2,
                 "Not Started ⏳": 3
             }
-            # Map the rank, defaulting to 4 if something weird happens
             df['rank'] = df['status'].map(status_rank).fillna(4)
             
             if 'updated_at' in df.columns:
@@ -164,7 +214,6 @@ if role == "teacher":
             else:
                 df['updated_at'] = pd.NaT
             
-            # Sort by rank first (Passed at top), then by earliest completion time, then alphabetically by name
             df = df.sort_values(by=['rank', 'updated_at', 'name'], ascending=[True, True, True]).reset_index(drop=True)
             
             display_df = df[['name', 'status', 'output']]
@@ -203,7 +252,6 @@ if role == "teacher":
                 }
                 try:
                     existing = supabase.table("current_task").select("id").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
-                    
                     if existing:
                         supabase.table("current_task").update(payload).eq("id", existing[0]['id']).execute()
                     else:
@@ -218,16 +266,21 @@ if role == "teacher":
                     st.error(f"Save failed: {e}")
 
 else: # STUDENT VIEW
-    st.title(f"🚀 {sel_class} - P{sel_period}")
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.title(f"{sel_class} - P{sel_period}")
+    with col2:
+        try:
+            st.image("AHS Square Name & Motto (Clear_No Background).png", width=120)
+        except:
+            pass
+
     if current_task.get('task_description'):
         st.markdown(current_task['task_description'])
         
-    # --- PRESERVE CODE STATE ---
-    # Create a unique session key for the current class/period
     code_key = f"student_code_{sel_class}_{sel_period}"
     
     if code_key not in st.session_state:
-        # Check database for a previous submission if nothing is in session state
         existing_sub = supabase.table("submissions").select("code").eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
         if existing_sub:
             st.session_state[code_key] = existing_sub[0]['code']
@@ -244,13 +297,10 @@ else: # STUDENT VIEW
         "style": {"bottom": "15px", "right": "15px", "position": "absolute"}
     }]
     
-    # Pre-fill the editor with the preserved code
     response = code_editor(st.session_state[code_key], lang="python", buttons=editor_btns, key="student_editor_instance")
     
     if response and response.get("type") == "submit":
         code = response.get("text", "")
-        
-        # Save the newest typed code into session state immediately
         st.session_state[code_key] = code 
         
         if not code.strip():
@@ -264,18 +314,15 @@ else: # STUDENT VIEW
                         timeout=15
                     ).json()
                     
-                    # Extract standard output
                     actual = str(sb_res.get("stdout", "")).strip()
                     if actual == "None": actual = ""
                     
-                    # Extract error outputs (handles runtime and compilation errors)
                     err_out = str(sb_res.get("stderr", "")).strip()
                     if err_out == "None": err_out = ""
                     comp_out = str(sb_res.get("compile_output", "")).strip()
                     if comp_out == "None": comp_out = ""
                     
                     error_output = err_out if err_out else comp_out
-                    
                     target = str(current_task.get('expected_output', '')).strip()
                     
                     status = "PASSED ✅" if actual == target else "WRONG OUTPUT ❌"
@@ -293,7 +340,6 @@ else: # STUDENT VIEW
                     }
                     
                     existing_sub_check = supabase.table("submissions").select("*").eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
-                    
                     if existing_sub_check:
                         supabase.table("submissions").update(sub_payload).eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute()
                     else:
@@ -301,7 +347,6 @@ else: # STUDENT VIEW
                         
                     st.success(f"Result: {status}")
                     
-                    # --- DISPLAY EXECUTION OUTPUT TO STUDENT ---
                     st.markdown("### 🖥️ Execution Output")
                     if actual:
                         st.code(actual, language="text")
