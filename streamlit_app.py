@@ -101,9 +101,9 @@ def login_ui():
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         try:
-            st.image("AHS Horizontal Logo with Motto (Clear_No Background).png", use_container_width=True)
+            st.image("images/AHS Horizontal Logo with Motto (Clear_No Background).png", use_container_width=True)
         except Exception:
-            st.warning("Logo image not found in root directory.")
+            st.warning("Logo image not found in images directory.")
             
         st.markdown("<h1 style='text-align: center;'>Secure Login</h1>", unsafe_allow_html=True)
         with st.form("login_form"):
@@ -136,7 +136,7 @@ user_fullname = user_data.get('name', 'User')
 # --- 3. SIDEBAR ---
 with st.sidebar:
     try:
-        st.image("AHS Emblem (Clear_No Background).jpg", width=150)
+        st.image("images/AHS Emblem (Clear_No Background).jpg", width=150)
     except Exception:
         pass # Silently pass if emblem is missing
         
