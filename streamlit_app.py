@@ -136,7 +136,7 @@ user_fullname = user_data.get('name', 'User')
 # --- 3. SIDEBAR ---
 with st.sidebar:
     try:
-        st.image("images/AHS Emblem (Clear_No Background).jpg", width=150)
+        st.image("images/AHS Emblem (Clear_No Background).png", width=150)
     except Exception:
         pass # Silently pass if emblem is missing
         
