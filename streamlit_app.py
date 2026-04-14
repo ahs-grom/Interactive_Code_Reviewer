@@ -176,13 +176,24 @@ current_task = get_task()
 # --- 5. MAIN INTERFACE ---
 if role == "teacher":
     st_autorefresh(interval=20000, key="datarefresh")
-    st.title(f"Dashboard: {sel_class} - P{sel_period}")
     
+    # Add columns for the Dashboard header to include the logo
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.title(f"Dashboard: {sel_class} - P{sel_period}")
+    with col2:
+        try:
+            # Using the images directory path
+            st.image("images/AHS Square Name & Motto (Clear_No Background).png", width=120)
+        except Exception as e:
+            st.warning(f"Image load failed: {e}")
+            
     t1, t2 = st.tabs(["🏆 Leaderboard", "⚙️ Setup"])
     
     with t1:
+        # (The rest of your leaderboard code stays exactly the same from here down)
         roster_data = supabase.table("rosters").select("student_name").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
-        
+
         if roster_data:
             roster_df = pd.DataFrame(roster_data).rename(columns={"student_name": "name"})
             subs = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
