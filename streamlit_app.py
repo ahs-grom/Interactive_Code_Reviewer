@@ -50,7 +50,6 @@ PUBLIC_MIRROR = "https://ce.judge0.com"
 
 # --- HELPER FUNCTIONS ---
 def format_python_error(err_text):
-    """Strips ugly tracebacks into a clean student-friendly format."""
     if not err_text: return ""
     lines = err_text.strip().split('\n')
     line_num = "Unknown"
@@ -69,29 +68,38 @@ def format_python_error(err_text):
     return err_text
 
 # --- AST MAPPING ENGINE ---
-AST_MAP = {
-    "Control Flow": {
-        "If Statement": ast.If,
-        "For Loop": ast.For,
-        "While Loop": ast.While,
-        "Function Definition": ast.FunctionDef
-    },
-    "Operators": {
-        "Addition (+)": ast.Add,
-        "Subtraction (-)": ast.Sub,
-        "Modulo (%)": ast.Mod,
-        "Equality (==)": ast.Eq,
-        "Greater Than (>)": ast.Gt
-    },
-    "Data Structures": {
-        "List []": ast.List,
-        "Dictionary {}": ast.Dict,
-        "Tuple ()": ast.Tuple
-    }
+# UI Category Structure
+AST_CATEGORIES = {
+    "Control Flow": ["If / Elif / Else", "For Loop", "While Loop", "Function (def)", "Class (class)", "Return"],
+    "Operators": ["Addition (+)", "Subtraction (-)", "Multiplication (*)", "Division (/)", "Modulo (%)", "Equality (==)", "Not Equal (!=)", "Greater Than (>)", "Less Than (<)", "Logical AND", "Logical OR", "Logical NOT"],
+    "Data Structures": ["List []", "Dictionary {}", "Tuple ()", "Set {}"],
+    "Built-in Functions": ["input()", "print()", "int()", "float()", "str()", "list()", "dict()", "set()", "len()", "range()"],
+    "String Methods": [".lower()", ".upper()", ".strip()", ".split()", ".replace()", ".join()"],
+    "Libraries": ["Regex (re)", "Math (math)", "Random (random)"]
 }
 
+# Translation Maps
+NODE_MAP = {
+    "If / Elif / Else": ast.If, "For Loop": ast.For, "While Loop": ast.While,
+    "Function (def)": ast.FunctionDef, "Class (class)": ast.ClassDef, "Return": ast.Return,
+    "Addition (+)": ast.Add, "Subtraction (-)": ast.Sub, "Multiplication (*)": ast.Mult,
+    "Division (/)": ast.Div, "Modulo (%)": ast.Mod, "Equality (==)": ast.Eq,
+    "Not Equal (!=)": ast.NotEq, "Greater Than (>)": ast.Gt, "Less Than (<)": ast.Lt,
+    "Logical AND": ast.And, "Logical OR": ast.Or, "Logical NOT": ast.Not,
+    "List []": ast.List, "Dictionary {}": ast.Dict, "Tuple ()": ast.Tuple, "Set {}": ast.Set
+}
+FUNC_MAP = { 
+    "input()": "input", "print()": "print", "int()": "int", "float()": "float", 
+    "str()": "str", "list()": "list", "dict()": "dict", "set()": "set", "len()": "len", "range()": "range" 
+}
+METHOD_MAP = { 
+    ".lower()": "lower", ".upper()": "upper", ".strip()": "strip", 
+    ".split()": "split", ".replace()": "replace", ".join()": "join" 
+}
+LIB_MAP = { "Regex (re)": "re", "Math (math)": "math", "Random (random)": "random" }
+
 def validate_code_structure(student_code, requirements):
-    """Parses student code and checks against required AST nodes."""
+    """Deep inspection of student code for specific logic, functions, methods, and libraries."""
     if not requirements:
         return True, ""
         
@@ -100,20 +108,46 @@ def validate_code_structure(student_code, requirements):
     except SyntaxError:
         return False, "Syntax Error: Code cannot be parsed for structural check."
 
-    found_nodes = [type(node) for node in ast.walk(tree)]
-    
-    for node in ast.walk(tree):
-        if isinstance(node, ast.BinOp):
-            found_nodes.append(type(node.op))
-        elif isinstance(node, ast.Compare):
-            for op in node.ops:
-                found_nodes.append(type(op))
+    found_nodes = set()
+    found_funcs = set()
+    found_methods = set()
+    found_libs = set()
 
+    # Traverse and categorize the AST
+    for node in ast.walk(tree):
+        found_nodes.add(type(node))
+        
+        # Dig into nested operators
+        if isinstance(node, ast.BinOp): found_nodes.add(type(node.op))
+        elif isinstance(node, ast.Compare):
+            for op in node.ops: found_nodes.add(type(op))
+        elif isinstance(node, ast.BoolOp): found_nodes.add(type(node.op))
+        elif isinstance(node, ast.UnaryOp): found_nodes.add(type(node.op))
+        
+        # Dig into function/method calls
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                found_funcs.add(node.func.id)
+            elif isinstance(node.func, ast.Attribute):
+                found_methods.add(node.func.attr)
+                
+        # Dig into imports
+        elif isinstance(node, ast.Import):
+            for alias in node.names: found_libs.add(alias.name.split('.')[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module: found_libs.add(node.module.split('.')[0])
+
+    # Cross-reference with requirements
     missing = []
     for category, items in requirements.items():
         for item in items:
-            required_ast_type = AST_MAP.get(category, {}).get(item)
-            if required_ast_type and required_ast_type not in found_nodes:
+            if item in NODE_MAP and NODE_MAP[item] not in found_nodes:
+                missing.append(item)
+            elif item in FUNC_MAP and FUNC_MAP[item] not in found_funcs:
+                missing.append(item)
+            elif item in METHOD_MAP and METHOD_MAP[item] not in found_methods:
+                missing.append(item)
+            elif item in LIB_MAP and LIB_MAP[item] not in found_libs:
                 missing.append(item)
 
     if missing:
@@ -240,7 +274,6 @@ if role == "teacher":
             df['output'] = df['output'].fillna("")
             df['code'] = df['code'].fillna("")
             
-            # Adjusted sorting to prioritize manual reviews
             status_rank = {
                 "PASSED ✅": 1,
                 "MANUAL REVIEW 🔍": 2,
@@ -307,16 +340,16 @@ if role == "teacher":
             selected_ast = {}
             loaded_ast = draft.get('ast_requirements', {})
             
-            for category, items in AST_MAP.items():
+            # Dynamic generation of categories using the new AST_CATEGORIES map
+            for category, items in AST_CATEGORIES.items():
                 with st.expander(f"{category}"):
                     selected_ast[category] = []
-                    for item in items.keys():
+                    for item in items:
                         is_checked = item in loaded_ast.get(category, [])
                         if st.checkbox(item, value=is_checked, key=f"ast_{category}_{item}"):
                             selected_ast[category].append(item)
 
             if st.form_submit_button("Update Assignment"):
-                # Clean up empty AST categories before saving
                 final_ast = {k: v for k, v in selected_ast.items() if v}
                 
                 payload = {
@@ -354,7 +387,6 @@ else: # STUDENT VIEW
     if current_task.get('task_description'):
         st.markdown(current_task['task_description'])
         
-    # Override Checkbox right above the editor
     override_ast = st.checkbox("🚩 **Override Structural Check (Flag for Manual Review)**", 
                                help="Check this if your code produces the right output but fails the AST check, and you want your teacher to review your alternative approach.")
         
@@ -388,7 +420,7 @@ else: # STUDENT VIEW
         else:
             with st.spinner("Executing code & checking structures..."):
                 try:
-                    # STEP 1: Execute via Judge0 FIRST (Check for Syntax/Runtime errors)
+                    # STEP 1: Execute via Judge0 FIRST
                     sb_res = requests.post(
                         f"{PUBLIC_MIRROR}/submissions?wait=true", 
                         json={"source_code": code, "language_id": 71, "stdin": str(current_task.get('goal_input', ''))}, 
@@ -425,7 +457,6 @@ else: # STUDENT VIEW
                             else:
                                 status = "AST MISSING 🧩"
                     
-                    # Save to DB
                     sub_payload = {
                         "name": user_fullname, 
                         "class_name": sel_class, 
