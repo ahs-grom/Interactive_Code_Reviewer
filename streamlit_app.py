@@ -436,10 +436,13 @@ if role == "teacher":
                         payload["id"] = highest[0]['id'] + 1 if highest else 1
                         supabase.table("current_task").insert(payload).execute()
                         
-                    st.success("Assignment & Structural Rules Updated!")
+                    # --- NEW FIX: Clear old student submissions for this class/period ---
+                    supabase.table("submissions").delete().eq("class_name", sel_class).eq("period", str(sel_period)).execute()
+                        
+                    st.success("Assignment Updated & Previous Submissions Cleared!")
                     if 'draft_task' in st.session_state:
                         del st.session_state['draft_task']
-                    time.sleep(0.5)
+                    time.sleep(1)
                     st.rerun()
                 except Exception as e:
                     st.error(f"Save failed: {e}")
