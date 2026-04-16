@@ -18,6 +18,9 @@ st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600&family=EB+Garamond:wght@400;600&display=swap');
 
+    /* Shrink Streamlit's massive default top padding */
+    .block-container { padding-top: 2rem !important; }
+
     html, body, [class*="css"] { font-family: 'Helvetica', sans-serif; }
     h1, h2, h3, h4, h5, h6 { font-family: 'EB Garamond', 'Times New Roman', serif !important; color: #1d5c9d !important; }
     .accent-text { font-family: 'Dancing Script', cursive !important; color: #fbb215 !important; font-size: 28px; margin-bottom: 10px; }
@@ -159,7 +162,7 @@ def login_ui():
         except Exception:
             pass
             
-        st.markdown("<h1 style='text-align: center;'>Secure Login</h1>", unsafe_allow_html=True)
+        st.markdown("<h1 style='text-align: center; margin-top: 0px;'>Secure Login</h1>", unsafe_allow_html=True)
         with st.form("login_form"):
             email = st.text_input("School Email:").lower().strip()
             password = st.text_input("Password:", type="password")
@@ -246,7 +249,7 @@ if role == "teacher":
     
     col1, col2 = st.columns([3, 1])
     with col1:
-        st.title(f"Dashboard: {sel_class} - P{sel_period}")
+        st.markdown(f"<h1 style='margin-top: -15px;'>Dashboard: {sel_class} - P{sel_period}</h1>", unsafe_allow_html=True)
     with col2:
         try:
             st.image("images/AHS Square Name & Motto (Clear_No Background).png", width=120)
@@ -444,7 +447,7 @@ if role == "teacher":
 else: # STUDENT VIEW
     col1, col2 = st.columns([3, 1])
     with col1:
-        st.title(f"{sel_class} - P{sel_period}")
+        st.markdown(f"<h1 style='margin-top: -15px;'>{sel_class} - P{sel_period}</h1>", unsafe_allow_html=True)
     with col2:
         try:
             st.image("images/AHS Square Name & Motto (Clear_No Background).png", width=120)
