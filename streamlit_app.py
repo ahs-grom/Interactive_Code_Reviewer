@@ -3,6 +3,8 @@ import requests
 import pandas as pd
 import time
 import re
+import json
+import ast
 from datetime import datetime, timezone
 from supabase import create_client
 from streamlit_autorefresh import st_autorefresh
@@ -12,47 +14,16 @@ from code_editor import code_editor
 st.set_page_config(page_title="American Heritage LMS", layout="wide", page_icon="🏫")
 
 # --- BRANDING & CSS INJECTION ---
-# Colors: Black (#000000), Dark Tangerine (#fbb215), Dolphin (#74747a), Endeavor (#1d5c9d)
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600&family=EB+Garamond:wght@400;600&display=swap');
 
-    /* Body Text - Helvetica */
-    html, body, [class*="css"] {
-        font-family: 'Helvetica', sans-serif;
-    }
-
-    /* Headlines - Garamond in Endeavor Blue */
-    h1, h2, h3, h4, h5, h6 {
-        font-family: 'EB Garamond', 'Times New Roman', serif !important;
-        color: #1d5c9d !important; 
-    }
-
-    /* Custom Accent Text - Dancing Script */
-    .accent-text {
-        font-family: 'Dancing Script', cursive !important;
-        color: #fbb215 !important;
-        font-size: 28px;
-        margin-bottom: 10px;
-    }
-    
-    .sub-accent {
-        color: #74747a !important; /* Dolphin Grey */
-        font-size: 18px;
-        font-weight: bold;
-    }
-
-    /* Button Styling */
-    .stButton>button {
-        background-color: #1d5c9d !important;
-        color: white !important;
-        border: 2px solid #1d5c9d !important;
-    }
-    .stButton>button:hover {
-        background-color: #fbb215 !important;
-        color: #000000 !important;
-        border: 2px solid #fbb215 !important;
-    }
+    html, body, [class*="css"] { font-family: 'Helvetica', sans-serif; }
+    h1, h2, h3, h4, h5, h6 { font-family: 'EB Garamond', 'Times New Roman', serif !important; color: #1d5c9d !important; }
+    .accent-text { font-family: 'Dancing Script', cursive !important; color: #fbb215 !important; font-size: 28px; margin-bottom: 10px; }
+    .sub-accent { color: #74747a !important; font-size: 18px; font-weight: bold; }
+    .stButton>button { background-color: #1d5c9d !important; color: white !important; border: 2px solid #1d5c9d !important; }
+    .stButton>button:hover { background-color: #fbb215 !important; color: #000000 !important; border: 2px solid #fbb215 !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -77,30 +48,78 @@ except Exception:
 
 PUBLIC_MIRROR = "https://ce.judge0.com" 
 
-# --- HELPER FUNCTION: PARSE ERRORS ---
+# --- HELPER FUNCTIONS ---
 def format_python_error(err_text):
     """Strips ugly tracebacks into a clean student-friendly format."""
     if not err_text: return ""
-    
     lines = err_text.strip().split('\n')
     line_num = "Unknown"
     code_snippet = ""
-    error_msg = lines[-1].strip() # The actual error type/message is almost always the last line
+    error_msg = lines[-1].strip() 
     
     for i, line in enumerate(lines):
-        # Look for the standard Python traceback line indicator
         match = re.search(r'File ".*?", line (\d+)', line)
         if match:
             line_num = match.group(1)
-            # The next line in the traceback is usually the offending code
             if i + 1 < len(lines):
                 code_snippet = lines[i+1].strip()
                 
     if line_num != "Unknown":
-        # Using double newline so Streamlit's Markdown engine forces a hard break
         return f"Line {line_num}:  {code_snippet}\n\n{error_msg}"
+    return err_text
+
+# --- AST MAPPING ENGINE ---
+AST_MAP = {
+    "Control Flow": {
+        "If Statement": ast.If,
+        "For Loop": ast.For,
+        "While Loop": ast.While,
+        "Function Definition": ast.FunctionDef
+    },
+    "Operators": {
+        "Addition (+)": ast.Add,
+        "Subtraction (-)": ast.Sub,
+        "Modulo (%)": ast.Mod,
+        "Equality (==)": ast.Eq,
+        "Greater Than (>)": ast.Gt
+    },
+    "Data Structures": {
+        "List []": ast.List,
+        "Dictionary {}": ast.Dict,
+        "Tuple ()": ast.Tuple
+    }
+}
+
+def validate_code_structure(student_code, requirements):
+    """Parses student code and checks against required AST nodes."""
+    if not requirements:
+        return True, ""
         
-    return err_text # Fallback to raw text if it's an unusual error format
+    try:
+        tree = ast.parse(student_code)
+    except SyntaxError:
+        return False, "Syntax Error: Code cannot be parsed for structural check."
+
+    found_nodes = [type(node) for node in ast.walk(tree)]
+    
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BinOp):
+            found_nodes.append(type(node.op))
+        elif isinstance(node, ast.Compare):
+            for op in node.ops:
+                found_nodes.append(type(op))
+
+    missing = []
+    for category, items in requirements.items():
+        for item in items:
+            required_ast_type = AST_MAP.get(category, {}).get(item)
+            if required_ast_type and required_ast_type not in found_nodes:
+                missing.append(item)
+
+    if missing:
+        return False, f"Missing required structures: {', '.join(missing)}"
+    
+    return True, "Structure valid!"
 
 # --- 2. AUTHENTICATION UI ---
 def login_ui():
@@ -109,7 +128,7 @@ def login_ui():
         try:
             st.image("images/AHS Horizontal Logo with Motto (Clear_No Background).png", use_container_width=True)
         except Exception:
-            pass # Silently pass if image isn't found to avoid clutter
+            pass
             
         st.markdown("<h1 style='text-align: center;'>Secure Login</h1>", unsafe_allow_html=True)
         with st.form("login_form"):
@@ -173,9 +192,15 @@ with st.sidebar:
 def get_task():
     try:
         res = supabase.table("current_task").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
-        return res[0] if res else {"task_description": "", "goal_input": "", "expected_output": ""}
+        if res:
+            task = res[0]
+            if isinstance(task.get('ast_requirements'), str):
+                try: task['ast_requirements'] = json.loads(task['ast_requirements'])
+                except: task['ast_requirements'] = {}
+            return task
+        return {"task_description": "", "goal_input": "", "expected_output": "", "ast_requirements": {}}
     except Exception:
-        return {"task_description": "", "goal_input": "", "expected_output": ""}
+        return {"task_description": "", "goal_input": "", "expected_output": "", "ast_requirements": {}}
 
 current_task = get_task()
 
@@ -215,13 +240,16 @@ if role == "teacher":
             df['output'] = df['output'].fillna("")
             df['code'] = df['code'].fillna("")
             
+            # Adjusted sorting to prioritize manual reviews
             status_rank = {
                 "PASSED ✅": 1,
-                "WRONG OUTPUT ❌": 2,
-                "RUNTIME ERROR ⚠️": 2,
-                "Not Started ⏳": 3
+                "MANUAL REVIEW 🔍": 2,
+                "WRONG OUTPUT ❌": 3,
+                "RUNTIME ERROR ⚠️": 3,
+                "AST MISSING 🧩": 4,
+                "Not Started ⏳": 5
             }
-            df['rank'] = df['status'].map(status_rank).fillna(4)
+            df['rank'] = df['status'].map(status_rank).fillna(6)
             
             if 'updated_at' in df.columns:
                 df['updated_at'] = pd.to_datetime(df['updated_at'], errors='coerce')
@@ -254,15 +282,47 @@ if role == "teacher":
             st.info("No students found in the roster for this class/period.")
 
     with t2:
+        st.markdown("### 🤖 Import AI Task Generation")
+        uploaded_file = st.file_uploader("Upload JSON Task File", type=["json"])
+        
+        if uploaded_file is not None:
+            try:
+                ai_data = json.load(uploaded_file)
+                st.session_state['draft_task'] = ai_data
+                st.success("JSON successfully loaded! Review and click Update Below.")
+            except Exception as e:
+                st.error(f"Error reading JSON: {e}")
+                
+        draft = st.session_state.get('draft_task', current_task)
+        
+        st.markdown("---")
         with st.form("task_setup"):
-            new_desc = st.text_area("Markdown Instructions:", value=current_task.get('task_description', ''))
-            new_in = st.text_input("Target Input:", value=current_task.get('goal_input', ''))
-            new_out = st.text_input("Target Output:", value=current_task.get('expected_output', ''))
+            new_desc = st.text_area("Markdown Instructions:", value=draft.get('task_description', ''))
+            new_in = st.text_input("Target Input:", value=draft.get('goal_input', ''))
+            new_out = st.text_input("Target Output:", value=draft.get('expected_output', ''))
             
+            st.markdown("### 🌳 Required AST Structures")
+            st.caption("Select the specific code structures students MUST use to pass.")
+            
+            selected_ast = {}
+            loaded_ast = draft.get('ast_requirements', {})
+            
+            for category, items in AST_MAP.items():
+                with st.expander(f"{category}"):
+                    selected_ast[category] = []
+                    for item in items.keys():
+                        is_checked = item in loaded_ast.get(category, [])
+                        if st.checkbox(item, value=is_checked, key=f"ast_{category}_{item}"):
+                            selected_ast[category].append(item)
+
             if st.form_submit_button("Update Assignment"):
+                # Clean up empty AST categories before saving
+                final_ast = {k: v for k, v in selected_ast.items() if v}
+                
                 payload = {
                     "class_name": sel_class, "period": str(sel_period),
-                    "task_description": new_desc, "goal_input": new_in, "expected_output": new_out
+                    "task_description": new_desc, "goal_input": new_in, 
+                    "expected_output": new_out, "ast_requirements": json.dumps(final_ast)
                 }
                 try:
                     existing = supabase.table("current_task").select("id").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
@@ -273,7 +333,9 @@ if role == "teacher":
                         payload["id"] = highest[0]['id'] + 1 if highest else 1
                         supabase.table("current_task").insert(payload).execute()
                         
-                    st.success("Updated!")
+                    st.success("Assignment & Structural Rules Updated!")
+                    if 'draft_task' in st.session_state:
+                        del st.session_state['draft_task']
                     time.sleep(0.5)
                     st.rerun()
                 except Exception as e:
@@ -291,6 +353,10 @@ else: # STUDENT VIEW
 
     if current_task.get('task_description'):
         st.markdown(current_task['task_description'])
+        
+    # Override Checkbox right above the editor
+    override_ast = st.checkbox("🚩 **Override Structural Check (Flag for Manual Review)**", 
+                               help="Check this if your code produces the right output but fails the AST check, and you want your teacher to review your alternative approach.")
         
     code_key = f"student_code_{sel_class}_{sel_period}"
     
@@ -320,8 +386,9 @@ else: # STUDENT VIEW
         if not code.strip():
             st.warning("Please write some code before submitting.")
         else:
-            with st.spinner("Executing code & updating database..."):
+            with st.spinner("Executing code & checking structures..."):
                 try:
+                    # STEP 1: Execute via Judge0 FIRST (Check for Syntax/Runtime errors)
                     sb_res = requests.post(
                         f"{PUBLIC_MIRROR}/submissions?wait=true", 
                         json={"source_code": code, "language_id": 71, "stdin": str(current_task.get('goal_input', ''))}, 
@@ -339,10 +406,26 @@ else: # STUDENT VIEW
                     error_output = err_out if err_out else comp_out
                     target = str(current_task.get('expected_output', '')).strip()
                     
-                    status = "PASSED ✅" if actual == target else "WRONG OUTPUT ❌"
+                    # STEP 2: Determine Base Status based on Execution
                     if error_output: 
                         status = "RUNTIME ERROR ⚠️"
+                    elif actual != target:
+                        status = "WRONG OUTPUT ❌"
+                    else:
+                        # STEP 3: If Output is Correct, check AST Structures
+                        reqs = current_task.get('ast_requirements', {})
+                        ast_passed, ast_msg = validate_code_structure(code, reqs)
+                        
+                        if ast_passed:
+                            status = "PASSED ✅"
+                        else:
+                            # STEP 4: Handle Override logic if AST fails
+                            if override_ast:
+                                status = "MANUAL REVIEW 🔍"
+                            else:
+                                status = "AST MISSING 🧩"
                     
+                    # Save to DB
                     sub_payload = {
                         "name": user_fullname, 
                         "class_name": sel_class, 
@@ -359,7 +442,15 @@ else: # STUDENT VIEW
                     else:
                         supabase.table("submissions").insert(sub_payload).execute()
                         
-                    st.success(f"Result: {status}")
+                    # UI Feedback based on status
+                    if status == "PASSED ✅":
+                        st.success("Result: PASSED ✅ - Output and structures are correct!")
+                    elif status == "MANUAL REVIEW 🔍":
+                        st.info("Result: MANUAL REVIEW 🔍 - Correct output, submitted for alternative approach review.")
+                    elif status == "AST MISSING 🧩":
+                        st.warning(f"Result: AST MISSING 🧩 - Your code produced the right text, but didn't pass the structure check:\n\n**{ast_msg}**\n\n*If you think your approach is valid, check the Override box above and resubmit.*")
+                    elif status == "WRONG OUTPUT ❌":
+                        st.error("Result: WRONG OUTPUT ❌")
                     
                     st.markdown("### 🖥️ Execution Output")
                     if actual:
@@ -373,4 +464,4 @@ else: # STUDENT VIEW
                         st.error(formatted_err)
                     
                 except Exception as e:
-                    st.error(f"Execution Error: {e}")
+                    st.error(f"System Error: {e}")
