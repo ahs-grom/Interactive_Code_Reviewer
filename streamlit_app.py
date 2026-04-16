@@ -113,31 +113,26 @@ def validate_code_structure(student_code, requirements):
     found_methods = set()
     found_libs = set()
 
-    # Traverse and categorize the AST
     for node in ast.walk(tree):
         found_nodes.add(type(node))
         
-        # Dig into nested operators
         if isinstance(node, ast.BinOp): found_nodes.add(type(node.op))
         elif isinstance(node, ast.Compare):
             for op in node.ops: found_nodes.add(type(op))
         elif isinstance(node, ast.BoolOp): found_nodes.add(type(node.op))
         elif isinstance(node, ast.UnaryOp): found_nodes.add(type(node.op))
         
-        # Dig into function/method calls
         elif isinstance(node, ast.Call):
             if isinstance(node.func, ast.Name):
                 found_funcs.add(node.func.id)
             elif isinstance(node.func, ast.Attribute):
                 found_methods.add(node.func.attr)
                 
-        # Dig into imports
         elif isinstance(node, ast.Import):
             for alias in node.names: found_libs.add(alias.name.split('.')[0])
         elif isinstance(node, ast.ImportFrom):
             if node.module: found_libs.add(node.module.split('.')[0])
 
-    # Cross-reference with requirements
     missing = []
     for category, items in requirements.items():
         for item in items:
@@ -228,9 +223,17 @@ def get_task():
         res = supabase.table("current_task").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
         if res:
             task = res[0]
-            if isinstance(task.get('ast_requirements'), str):
-                try: task['ast_requirements'] = json.loads(task['ast_requirements'])
-                except: task['ast_requirements'] = {}
+            ast_req = task.get('ast_requirements')
+            
+            # Robust JSON parsing for the AST requirements
+            if isinstance(ast_req, str):
+                try: 
+                    task['ast_requirements'] = json.loads(ast_req)
+                except Exception: 
+                    task['ast_requirements'] = {}
+            elif not isinstance(ast_req, dict):
+                task['ast_requirements'] = {}
+                
             return task
         return {"task_description": "", "goal_input": "", "expected_output": "", "ast_requirements": {}}
     except Exception:
@@ -338,9 +341,19 @@ if role == "teacher":
             st.caption("Select the specific code structures students MUST use to pass.")
             
             selected_ast = {}
-            loaded_ast = draft.get('ast_requirements', {})
             
-            # Dynamic generation of categories using the new AST_CATEGORIES map
+            # --- FAILSAFE: Ensure loaded_ast is ALWAYS a dictionary ---
+            loaded_ast = draft.get('ast_requirements')
+            if isinstance(loaded_ast, str):
+                try: 
+                    loaded_ast = json.loads(loaded_ast)
+                except Exception: 
+                    loaded_ast = {}
+                    
+            if not isinstance(loaded_ast, dict):
+                loaded_ast = {}
+            # -----------------------------------------------------------
+            
             for category, items in AST_CATEGORIES.items():
                 with st.expander(f"{category}"):
                     selected_ast[category] = []
