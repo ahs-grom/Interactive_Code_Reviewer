@@ -539,4 +539,22 @@ else: # STUDENT VIEW
                     if status == "PASSED ✅":
                         st.success("Result: PASSED ✅ - Output and structures are correct!")
                     elif status == "MANUAL REVIEW 🔍":
-                        st.info("Result: MANUAL REVIEW 🔍 - Correct output,
+                        st.info("Result: MANUAL REVIEW 🔍 - Correct output, submitted for alternative approach review.")
+                    elif status == "AST MISSING 🧩":
+                        st.warning(f"Result: AST MISSING 🧩 - Your code produced the right text, but didn't pass the structure check:\n\n**{ast_msg}**\n\n*If you think your approach is valid, check the Override box above and resubmit.*")
+                    elif status == "WRONG OUTPUT ❌":
+                        st.error("Result: WRONG OUTPUT ❌")
+                    
+                    st.markdown("### 🖥️ Execution Output")
+                    if actual:
+                        st.code(actual, language="text")
+                    elif not error_output:
+                        st.info("No standard output produced.")
+                        
+                    if error_output:
+                        st.markdown("### ⚠️ Error Messages")
+                        formatted_err = format_python_error(error_output)
+                        st.error(formatted_err)
+                    
+                except Exception as e:
+                    st.error(f"System Error: {e}")
