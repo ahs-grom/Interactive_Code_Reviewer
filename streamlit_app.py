@@ -79,22 +79,28 @@ PUBLIC_MIRROR = "https://ce.judge0.com"
 
 # --- HELPER FUNCTION: PARSE ERRORS ---
 def format_python_error(err_text):
+    """Strips ugly tracebacks into a clean student-friendly format."""
     if not err_text: return ""
+    
     lines = err_text.strip().split('\n')
     line_num = "Unknown"
     code_snippet = ""
-    error_msg = lines[-1].strip() 
+    error_msg = lines[-1].strip() # The actual error type/message is almost always the last line
     
     for i, line in enumerate(lines):
+        # Look for the standard Python traceback line indicator
         match = re.search(r'File ".*?", line (\d+)', line)
         if match:
             line_num = match.group(1)
+            # The next line in the traceback is usually the offending code
             if i + 1 < len(lines):
                 code_snippet = lines[i+1].strip()
                 
     if line_num != "Unknown":
+        # Using double newline so Streamlit's Markdown engine forces a hard break
         return f"Line {line_num}:  {code_snippet}\n\n{error_msg}"
-    return err_text
+        
+    return err_text # Fallback to raw text if it's an unusual error format
 
 # --- 2. AUTHENTICATION UI ---
 def login_ui():
@@ -103,7 +109,7 @@ def login_ui():
         try:
             st.image("images/AHS Horizontal Logo with Motto (Clear_No Background).png", use_container_width=True)
         except Exception:
-            st.warning("Logo image not found in images directory.")
+            pass # Silently pass if image isn't found to avoid clutter
             
         st.markdown("<h1 style='text-align: center;'>Secure Login</h1>", unsafe_allow_html=True)
         with st.form("login_form"):
@@ -138,7 +144,7 @@ with st.sidebar:
     try:
         st.image("images/AHS Emblem (Clear_No Background).png", width=150)
     except Exception:
-        pass # Silently pass if emblem is missing
+        pass 
         
     st.markdown(f"<p class='accent-text'>Welcome,</p>", unsafe_allow_html=True)
     st.markdown(f"**{user_fullname}**<br><span class='sub-accent'>{role.title()} Portal</span>", unsafe_allow_html=True)
@@ -177,23 +183,20 @@ current_task = get_task()
 if role == "teacher":
     st_autorefresh(interval=20000, key="datarefresh")
     
-    # Add columns for the Dashboard header to include the logo
     col1, col2 = st.columns([3, 1])
     with col1:
         st.title(f"Dashboard: {sel_class} - P{sel_period}")
     with col2:
         try:
-            # Using the images directory path
             st.image("images/AHS Square Name & Motto (Clear_No Background).png", width=120)
-        except Exception as e:
-            st.warning(f"Image load failed: {e}")
+        except Exception:
+            pass
             
     t1, t2 = st.tabs(["🏆 Leaderboard", "⚙️ Setup"])
     
     with t1:
-        # (The rest of your leaderboard code stays exactly the same from here down)
         roster_data = supabase.table("rosters").select("student_name").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
-
+        
         if roster_data:
             roster_df = pd.DataFrame(roster_data).rename(columns={"student_name": "name"})
             subs = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
@@ -282,7 +285,7 @@ else: # STUDENT VIEW
         st.title(f"{sel_class} - P{sel_period}")
     with col2:
         try:
-            st.image("AHS Square Name & Motto (Clear_No Background).png", width=120)
+            st.image("images/AHS Square Name & Motto (Clear_No Background).png", width=120)
         except:
             pass
 
