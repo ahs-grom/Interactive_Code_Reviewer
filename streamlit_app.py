@@ -287,29 +287,23 @@ if role == "teacher":
         st.session_state.r_key += 1
         st.session_state.last_action = 'none'
 
-    # --- Optimized Header Layout ---
-    # Col ratios: [Logo space] [Wide Title space] [Button space]
     header_logo_col, header_title_col, header_btn_col = st.columns([0.6, 6, 1.5])
     
     with header_logo_col:
         try: 
-            # Subtly nudge logo down to align with text baseline
             st.markdown("<div style='padding-top: 5px;'>", unsafe_allow_html=True)
             st.image("images/AHS Square Name & Motto (Clear_No Background).png", width=60)
             st.markdown("</div>", unsafe_allow_html=True)
         except Exception: pass
 
     with header_title_col:
-        # Title text immediately right of logo, removed previous neg margin fighting padding
         st.markdown(f"<h3>{sel_class} - P{sel_period}</h3>", unsafe_allow_html=True)
 
     with header_btn_col:
-        # Subtle push down to vertically align with title text baseline
         st.write("") 
         st.write("") 
         st.button("🔄 Refresh Data", use_container_width=True, on_click=refresh_btn_click)
         
-    # --- Body Content ---
     t1, t2 = st.tabs(["🏆 Leaderboard", "⚙️ Setup"])
     
     with t1:
@@ -348,12 +342,8 @@ if role == "teacher":
             passed_df = df[df['status'] == "PASSED ✅"].reset_index(drop=True)
             others_df = df[df['status'] != "PASSED ✅"].reset_index(drop=True)
             
-            # Format the passed dataframe for the right widget
             passed_disp = passed_df[['name', 'updated_at']].copy()
-            # Truncate string to 15 chars 
             passed_disp['name'] = passed_disp['name'].apply(lambda x: str(x)[:15] + "..." if len(str(x)) > 15 else str(x))
-            
-            # Extract formatted time with exactly 3 decimals (milliseconds) + AM/PM
             passed_disp['Time'] = passed_disp['updated_at'].apply(
                 lambda x: x.strftime('%I:%M:%S.%f')[:-3] + x.strftime(' %p') if pd.notnull(x) else "--:--"
             )
@@ -484,9 +474,39 @@ if role == "teacher":
             if uploaded_file is not None:
                 try:
                     ai_data = json.load(uploaded_file)
-                    st.session_state['draft_task'] = ai_data
-                    st.success("JSON loaded! Review below.")
-                except Exception as e: st.error(f"Error reading JSON: {e}")
+                    
+                    # --- NEW LOGIC: Check for list vs single dict ---
+                    if isinstance(ai_data, list):
+                        inserted_count = 0
+                        with st.spinner("Importing tasks directly into Question Bank..."):
+                            for task in ai_data:
+                                if "title" not in task: continue
+                                
+                                bank_payload = {
+                                    "title": task["title"],
+                                    "teacher_name": user_fullname, 
+                                    "tags": task.get("tags", ""),
+                                    "task_description": task.get("task_description", ""),
+                                    "test_cases": task.get("test_cases", []),
+                                    "ast_requirements": json.dumps(task.get("ast_requirements", {}))
+                                }
+                                
+                                existing = supabase.table("question_bank").select("title").eq("title", task["title"]).eq("teacher_name", user_fullname).execute().data
+                                if existing:
+                                    supabase.table("question_bank").update(bank_payload).eq("title", task["title"]).eq("teacher_name", user_fullname).execute()
+                                else:
+                                    supabase.table("question_bank").insert(bank_payload).execute()
+                                    
+                                inserted_count += 1
+                                
+                        st.success(f"Successfully imported {inserted_count} tasks into your Question Bank!")
+                        time.sleep(1.5)
+                        st.rerun()
+                    else:
+                        st.session_state['draft_task'] = ai_data
+                        st.success("JSON loaded! Review below.")
+                except Exception as e: 
+                    st.error(f"Error reading JSON: {e}")
                 
         draft = st.session_state.get('draft_task', current_task)
         
@@ -587,12 +607,10 @@ if role == "teacher":
                         except Exception as e: st.error(f"Save failed: {e}")
 
 else: # STUDENT VIEW
-    # --- Unified Header Layout applied to Student View ---
     header_logo_col, header_title_col, header_spacer_col = st.columns([0.6, 6, 1.5])
     
     with header_logo_col:
         try: 
-            # Subtly nudge logo down to align with text baseline
             st.markdown("<div style='padding-top: 5px;'>", unsafe_allow_html=True)
             st.image("images/AHS Square Name & Motto (Clear_No Background).png", width=60)
             st.markdown("</div>", unsafe_allow_html=True)
@@ -601,10 +619,6 @@ else: # STUDENT VIEW
     with header_title_col:
         st.markdown(f"<h3>{sel_class} - P{sel_period}</h3>", unsafe_allow_html=True)
 
-    # Empty spacer column where the button is in Teacher view
-
-    # --- Student Body Content ---
-    # Display Title and Description
     if current_task.get('title'):
         st.markdown(f"## {current_task['title']}")
         
