@@ -132,7 +132,6 @@ def validate_code_structure(student_code, requirements):
     return True, "Structure valid!"
 
 def execute_test_cases(code, test_cases, ast_requirements, override_ast=False):
-    """Executes a suite of test cases against the provided code."""
     status = "PASSED ✅"
     actual_display = ""
     error_display = ""
@@ -271,9 +270,9 @@ def get_task():
                 task['test_cases'] = []
                 
             return task
-        return {"task_description": "", "test_cases": [], "ast_requirements": {}}
+        return {"title": "", "task_description": "", "test_cases": [], "ast_requirements": {}}
     except Exception:
-        return {"task_description": "", "test_cases": [], "ast_requirements": {}}
+        return {"title": "", "task_description": "", "test_cases": [], "ast_requirements": {}}
 
 current_task = get_task()
 
@@ -283,7 +282,6 @@ if role == "teacher":
     
     col1, col2 = st.columns([3, 1])
     with col1: 
-        # UI CHANGE: REMOVED "Dashboard:"
         st.markdown(f"<h1 style='margin-top: -15px;'>{sel_class} - P{sel_period}</h1>", unsafe_allow_html=True)
     with col2:
         try: st.image("images/AHS Square Name & Motto (Clear_No Background).png", width=120)
@@ -363,33 +361,75 @@ if role == "teacher":
             st.info("No students found in the roster for this class/period.")
 
     with t2:
-        st.markdown("### 🤖 Import AI Task Generation")
-        uploaded_file = st.file_uploader("Upload JSON Task File", type=["json"])
-        
-        if uploaded_file is not None:
-            try:
-                ai_data = json.load(uploaded_file)
-                st.session_state['draft_task'] = ai_data
-                st.success("JSON successfully loaded! Review and click Update Below.")
-            except Exception as e: st.error(f"Error reading JSON: {e}")
+        st.markdown("### 📚 Question Bank")
+        try:
+            bank_data = supabase.table("question_bank").select("*").execute().data
+        except Exception:
+            bank_data = []
+
+        colA, colB = st.columns([3, 1])
+        with colA:
+            if bank_data:
+                # OPTION A: Distinguish questions by Author in the dropdown
+                bank_options = {f"{q['title']} (by {q.get('teacher_name', 'Unknown')})": q for q in bank_data}
+                selected_bank_q = st.selectbox("Load from Question Bank:", ["-- Select a Template --"] + list(bank_options.keys()))
+                
+                colA1, colA2 = st.columns([1, 1])
+                with colA1:
+                    if st.button("⬇️ Load Selected", use_container_width=True):
+                        if selected_bank_q != "-- Select a Template --":
+                            st.session_state['draft_task'] = bank_options[selected_bank_q]
+                            st.success("Loaded into draft below!")
+                with colA2:
+                    if st.button("🗑️ Delete from Bank", use_container_width=True):
+                        if selected_bank_q != "-- Select a Template --":
+                            selected_q_data = bank_options[selected_bank_q]
+                            # OPTION A: Block deleting someone else's question
+                            if selected_q_data.get('teacher_name') == user_fullname:
+                                supabase.table("question_bank").delete().eq("title", selected_q_data['title']).eq("teacher_name", user_fullname).execute()
+                                st.success(f"Deleted '{selected_q_data['title']}' from your bank.")
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error("❌ You can only delete templates that you created!")
+            else:
+                st.info("Your question bank is empty. Save tasks below to build your library!")
+                
+        with colB:
+            st.markdown("**OR** Upload JSON")
+            uploaded_file = st.file_uploader("", type=["json"], label_visibility="collapsed")
+            if uploaded_file is not None:
+                try:
+                    ai_data = json.load(uploaded_file)
+                    st.session_state['draft_task'] = ai_data
+                    st.success("JSON loaded! Review below.")
+                except Exception as e: st.error(f"Error reading JSON: {e}")
                 
         draft = st.session_state.get('draft_task', current_task)
         
         st.markdown("---")
+        st.markdown("### 📝 Assignment Setup & Preview")
+        
         with st.form("task_setup"):
-            new_desc = st.text_area("Markdown Instructions:", value=draft.get('task_description', ''))
+            new_title = st.text_input("Assignment Title:", value=draft.get('title', ''))
+            new_tags = st.text_input("Tags (comma separated, for bank filtering):", value=draft.get('tags', ''))
+            new_desc = st.text_area("Markdown Instructions:", value=draft.get('task_description', ''), height=150)
             
             st.markdown("### 🧪 Test Cases")
-            st.caption("Add inputs and expected outputs. Check 'is_hidden' to hide the details from students.")
             
             default_tc = pd.DataFrame([{"input": "", "expected_output": "", "is_hidden": False}])
-            if "test_cases" in draft and draft["test_cases"]:
-                default_tc = pd.DataFrame(draft["test_cases"])
+            
+            raw_tc = draft.get("test_cases", [])
+            if isinstance(raw_tc, str):
+                try: raw_tc = json.loads(raw_tc)
+                except: raw_tc = []
+            
+            if raw_tc and isinstance(raw_tc, list):
+                default_tc = pd.DataFrame(raw_tc)
                 
             edited_tc = st.data_editor(default_tc, num_rows="dynamic", use_container_width=True, hide_index=True)
             
             st.markdown("### 🌳 Required AST Structures")
-            st.caption("Select the specific code structures students MUST use to pass.")
             
             selected_ast = {}
             loaded_ast = draft.get('ast_requirements')
@@ -406,32 +446,69 @@ if role == "teacher":
                         if st.checkbox(item, value=is_checked, key=f"ast_{category}_{item}"):
                             selected_ast[category].append(item)
 
-            if st.form_submit_button("Update Assignment"):
-                final_ast = {k: v for k, v in selected_ast.items() if v}
-                clean_tc = edited_tc.dropna(subset=['expected_output']).to_dict('records')
-                
-                payload = {
-                    "class_name": sel_class, "period": str(sel_period),
-                    "task_description": new_desc, 
-                    "test_cases": clean_tc, 
-                    "ast_requirements": json.dumps(final_ast)
-                }
-                try:
-                    existing = supabase.table("current_task").select("id").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
-                    if existing:
-                        supabase.table("current_task").update(payload).eq("id", existing[0]['id']).execute()
+            st.markdown("---")
+            save_to_bank = st.checkbox("💾 Save/Update this template in the Question Bank", value=True)
+            
+            # OPTION B: Explicit Override Checkbox
+            allow_overwrite = st.checkbox("⚠️ Overwrite existing template if my title matches (Leave unchecked to save as a new copy if warned)", value=False)
+            
+            if st.form_submit_button("Deploy Assignment to Students"):
+                if not new_title.strip():
+                    st.error("Please provide an Assignment Title.")
+                else:
+                    final_ast = {k: v for k, v in selected_ast.items() if v}
+                    clean_tc = edited_tc.dropna(subset=['expected_output']).to_dict('records')
+                    
+                    # Pre-check for Option B (Overwrite Conflict)
+                    conflict_detected = False
+                    if save_to_bank:
+                        existing_mine = supabase.table("question_bank").select("title").eq("title", new_title).eq("teacher_name", user_fullname).execute().data
+                        if existing_mine and not allow_overwrite:
+                            conflict_detected = True
+                            
+                    if conflict_detected:
+                        st.error(f"⚠️ You already have a template named '{new_title}' in the bank. Please check the 'Overwrite existing template' box below to update it, or change the title.")
                     else:
-                        highest = supabase.table("current_task").select("id").order("id", desc=True).limit(1).execute().data
-                        payload["id"] = highest[0]['id'] + 1 if highest else 1
-                        supabase.table("current_task").insert(payload).execute()
-                        
-                    supabase.table("submissions").delete().eq("class_name", sel_class).eq("period", str(sel_period)).execute()
-                        
-                    st.success("Assignment Updated & Previous Submissions Cleared!")
-                    if 'draft_task' in st.session_state: del st.session_state['draft_task']
-                    time.sleep(1)
-                    st.rerun()
-                except Exception as e: st.error(f"Save failed: {e}")
+                        # 1. Update/Insert to active current_task
+                        payload = {
+                            "class_name": sel_class, "period": str(sel_period),
+                            "title": new_title,
+                            "task_description": new_desc, 
+                            "test_cases": clean_tc, 
+                            "ast_requirements": json.dumps(final_ast)
+                        }
+                        try:
+                            existing = supabase.table("current_task").select("id").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
+                            if existing:
+                                supabase.table("current_task").update(payload).eq("id", existing[0]['id']).execute()
+                            else:
+                                supabase.table("current_task").insert(payload).execute()
+                                
+                            # Clear old submissions for this class
+                            supabase.table("submissions").delete().eq("class_name", sel_class).eq("period", str(sel_period)).execute()
+                            
+                            # 2. Save to Question Bank
+                            if save_to_bank:
+                                bank_payload = {
+                                    "title": new_title,
+                                    "teacher_name": user_fullname, # Tracks the author!
+                                    "tags": new_tags,
+                                    "task_description": new_desc,
+                                    "test_cases": clean_tc,
+                                    "ast_requirements": json.dumps(final_ast)
+                                }
+                                # We already checked for conflict. It's safe to upsert/insert.
+                                existing_bank = supabase.table("question_bank").select("title").eq("title", new_title).eq("teacher_name", user_fullname).execute().data
+                                if existing_bank:
+                                    supabase.table("question_bank").update(bank_payload).eq("title", new_title).eq("teacher_name", user_fullname).execute()
+                                else:
+                                    supabase.table("question_bank").insert(bank_payload).execute()
+                                
+                            st.success("Assignment Deployed & Student Data Cleared!")
+                            if 'draft_task' in st.session_state: del st.session_state['draft_task']
+                            time.sleep(1.5)
+                            st.rerun()
+                        except Exception as e: st.error(f"Save failed: {e}")
 
 else: # STUDENT VIEW
     col1, col2 = st.columns([3, 1])
@@ -440,6 +517,10 @@ else: # STUDENT VIEW
         try: st.image("images/AHS Square Name & Motto (Clear_No Background).png", width=120)
         except: pass
 
+    # Display Title and Description
+    if current_task.get('title'):
+        st.markdown(f"## {current_task['title']}")
+        
     if current_task.get('task_description'):
         st.markdown(current_task['task_description'])
         
