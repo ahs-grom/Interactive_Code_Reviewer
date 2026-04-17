@@ -137,7 +137,6 @@ def execute_test_cases(code, test_cases, ast_requirements, override_ast=False):
     actual_display = ""
     error_display = ""
     
-    # Fallback if no test cases defined
     if not test_cases:
         test_cases = [{"input": "", "expected_output": "", "is_hidden": False}]
         
@@ -175,14 +174,12 @@ def execute_test_cases(code, test_cases, ast_requirements, override_ast=False):
                     actual_display = f"❌ Failed Test Case {i+1}:\nInput: {target_in}\nExpected: {target_out}\nGot: {actual}"
                 break
             else:
-                # Store the output of the first test case for display purposes
                 if i == 0:
                     actual_display = actual
                     
         except Exception as e:
             return "RUNTIME ERROR ⚠️", "", f"System Execution Error: {e}", ""
             
-    # If all tests passed, check AST
     ast_msg = ""
     if status == "PASSED ✅":
         ast_passed, ast_msg = validate_code_structure(code, ast_requirements)
@@ -266,7 +263,6 @@ def get_task():
             elif not isinstance(ast_req, dict):
                 task['ast_requirements'] = {}
                 
-            # Parse test cases
             tc = task.get('test_cases')
             if isinstance(tc, str):
                 try: task['test_cases'] = json.loads(tc)
@@ -286,7 +282,9 @@ if role == "teacher":
     st_autorefresh(interval=20000, key="datarefresh")
     
     col1, col2 = st.columns([3, 1])
-    with col1: st.markdown(f"<h1 style='margin-top: -15px;'>Dashboard: {sel_class} - P{sel_period}</h1>", unsafe_allow_html=True)
+    with col1: 
+        # UI CHANGE: REMOVED "Dashboard:"
+        st.markdown(f"<h1 style='margin-top: -15px;'>{sel_class} - P{sel_period}</h1>", unsafe_allow_html=True)
     with col2:
         try: st.image("images/AHS Square Name & Motto (Clear_No Background).png", width=120)
         except Exception: pass
@@ -445,7 +443,6 @@ else: # STUDENT VIEW
     if current_task.get('task_description'):
         st.markdown(current_task['task_description'])
         
-        # Display Visible Test Cases dynamically
         visible_cases = [tc for tc in current_task.get('test_cases', []) if not tc.get('is_hidden', False)]
         if visible_cases:
             st.markdown("### 🔍 Example Test Cases")
