@@ -18,7 +18,7 @@ st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600&family=EB+Garamond:wght@400;600&display=swap');
 
-    .block-container { padding-top: 2rem !important; }
+    .block-container { padding-top: 1.5rem !important; }
 
     html, body, [class*="css"] { font-family: 'Helvetica', sans-serif; }
     h1, h2, h3, h4, h5, h6 { font-family: 'EB Garamond', 'Times New Roman', serif !important; color: #1d5c9d !important; }
@@ -280,24 +280,22 @@ current_task = get_task()
 if role == "teacher":
     st_autorefresh(interval=20000, key="datarefresh")
     
-    col1, col2 = st.columns([3, 1])
+    col1, col2 = st.columns([6, 1])
     with col1: 
-        st.markdown(f"<h1 style='margin-top: -15px;'>{sel_class} - P{sel_period}</h1>", unsafe_allow_html=True)
+        st.markdown(f"<h3 style='margin-top: -25px; margin-bottom: 0px;'>{sel_class} - P{sel_period}</h3>", unsafe_allow_html=True)
     with col2:
-        try: st.image("images/AHS Square Name & Motto (Clear_No Background).png", width=120)
+        try: st.image("images/AHS Square Name & Motto (Clear_No Background).png", width=60)
         except Exception: pass
             
     t1, t2 = st.tabs(["🏆 Leaderboard", "⚙️ Setup"])
     
     with t1:
-        # Provide a custom callback for refresh to clear visual selections
         def refresh_btn_click():
             st.session_state.l_key += 1
             st.session_state.r_key += 1
             st.session_state.last_action = 'none'
 
-        colA, colB = st.columns([4, 1])
-        with colA: st.markdown("### Submission Results")
+        colA, colB = st.columns([6, 1])
         with colB:
             st.button("🔄 Refresh Data", use_container_width=True, on_click=refresh_btn_click)
 
@@ -324,21 +322,29 @@ if role == "teacher":
             status_rank = {"PASSED ✅": 1, "MANUAL REVIEW 🔍": 2, "WRONG OUTPUT ❌": 3, "RUNTIME ERROR ⚠️": 3, "AST MISSING 🧩": 4, "Not Started ⏳": 5}
             df['rank'] = df['status'].map(status_rank).fillna(6)
             
-            if 'updated_at' in df.columns: df['updated_at'] = pd.to_datetime(df['updated_at'], errors='coerce')
-            else: df['updated_at'] = pd.NaT
+            if 'updated_at' in df.columns: 
+                df['updated_at'] = pd.to_datetime(df['updated_at'], errors='coerce')
+                try: df['updated_at'] = df['updated_at'].dt.tz_convert('America/New_York')
+                except TypeError: pass 
+            else: 
+                df['updated_at'] = pd.NaT
             
             df = df.sort_values(by=['rank', 'updated_at', 'name'], ascending=[True, True, True]).reset_index(drop=True)
             
-            # Divide into Passed vs Needs Attention
             passed_df = df[df['status'] == "PASSED ✅"].reset_index(drop=True)
             others_df = df[df['status'] != "PASSED ✅"].reset_index(drop=True)
             
-            # State Management for Mutual Exclusion between tables
+            # Format the passed dataframe for the right widget
+            passed_disp = passed_df[['name', 'updated_at']].copy()
+            # Truncate string to 15 chars 
+            passed_disp['name'] = passed_disp['name'].apply(lambda x: str(x)[:15] + "..." if len(str(x)) > 15 else str(x))
+            passed_disp['Time'] = passed_disp['updated_at'].dt.strftime('%I:%M %p').fillna("--:--")
+            passed_disp = passed_disp[['name', 'Time']]
+            
             if 'l_key' not in st.session_state: st.session_state.l_key = 0
             if 'r_key' not in st.session_state: st.session_state.r_key = 0
             if 'last_action' not in st.session_state: st.session_state.last_action = 'none'
 
-            # 2:1 column ratio to give the left table more space for the output column
             col_left, col_right = st.columns([2, 1])
             
             with col_left:
@@ -353,7 +359,7 @@ if role == "teacher":
             with col_right:
                 st.markdown("**Passed ✅**")
                 right_event = st.dataframe(
-                    passed_df[['name', 'status']], 
+                    passed_disp, 
                     hide_index=True, use_container_width=True, 
                     on_select="rerun", selection_mode="single-row", 
                     height=210, key=f"right_board_{st.session_state.r_key}"
@@ -362,7 +368,6 @@ if role == "teacher":
             l_sel = left_event.selection.rows
             r_sel = right_event.selection.rows
             
-            # Logic to resolve selections and force visual deselect
             if l_sel and st.session_state.last_action != 'left':
                 st.session_state.last_action = 'left'
                 st.session_state.r_key += 1
@@ -378,14 +383,12 @@ if role == "teacher":
             if not r_sel and st.session_state.last_action == 'right':
                 st.session_state.last_action = 'none'
                 
-            # Grab the actual selected student's data
             selected_student = None
             if st.session_state.last_action == 'left' and l_sel:
                 selected_student = others_df.iloc[l_sel[0]]
             elif st.session_state.last_action == 'right' and r_sel:
                 selected_student = passed_df.iloc[r_sel[0]]
                 
-            # Code Viewer Rendering
             if selected_student is not None:
                 st.markdown("---")
                 st.markdown(f"### 💻 Code: {selected_student['name']}")
@@ -560,10 +563,11 @@ if role == "teacher":
                         except Exception as e: st.error(f"Save failed: {e}")
 
 else: # STUDENT VIEW
-    col1, col2 = st.columns([3, 1])
-    with col1: st.markdown(f"<h1 style='margin-top: -15px;'>{sel_class} - P{sel_period}</h1>", unsafe_allow_html=True)
+    col1, col2 = st.columns([6, 1])
+    with col1: 
+        st.markdown(f"<h3 style='margin-top: -25px; margin-bottom: 0px;'>{sel_class} - P{sel_period}</h3>", unsafe_allow_html=True)
     with col2:
-        try: st.image("images/AHS Square Name & Motto (Clear_No Background).png", width=120)
+        try: st.image("images/AHS Square Name & Motto (Clear_No Background).png", width=60)
         except: pass
 
     # Display Title and Description
