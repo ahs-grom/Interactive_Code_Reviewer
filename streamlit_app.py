@@ -218,8 +218,8 @@ if not st.session_state.get("authenticated"):
     st.stop()
 
 user_data = st.session_state.get("user_info", {})
-role = user_data.get('role', 'student')
-user_fullname = user_data.get('name', 'User')
+role = user_data.get('role') or 'student'
+user_fullname = user_data.get('name') or 'User'
 
 # --- 3. SIDEBAR ---
 with st.sidebar:
@@ -290,10 +290,16 @@ if role == "teacher":
     t1, t2 = st.tabs(["🏆 Leaderboard", "⚙️ Setup"])
     
     with t1:
+        # Provide a custom callback for refresh to clear visual selections
+        def refresh_btn_click():
+            st.session_state.l_key += 1
+            st.session_state.r_key += 1
+            st.session_state.last_action = 'none'
+
         colA, colB = st.columns([4, 1])
         with colA: st.markdown("### Submission Results")
         with colB:
-            if st.button("🔄 Refresh Data", use_container_width=True): st.rerun()
+            st.button("🔄 Refresh Data", use_container_width=True, on_click=refresh_btn_click)
 
         roster_data = supabase.table("rosters").select("student_name").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
         
@@ -322,14 +328,66 @@ if role == "teacher":
             else: df['updated_at'] = pd.NaT
             
             df = df.sort_values(by=['rank', 'updated_at', 'name'], ascending=[True, True, True]).reset_index(drop=True)
-            display_df = df[['name', 'status', 'output']]
             
-            selection_event = st.dataframe(display_df, hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row")
+            # Divide into Passed vs Needs Attention
+            passed_df = df[df['status'] == "PASSED ✅"].reset_index(drop=True)
+            others_df = df[df['status'] != "PASSED ✅"].reset_index(drop=True)
             
-            if selection_event.selection.rows:
-                selected_idx = selection_event.selection.rows[0]
-                selected_student = df.iloc[selected_idx]
+            # State Management for Mutual Exclusion between tables
+            if 'l_key' not in st.session_state: st.session_state.l_key = 0
+            if 'r_key' not in st.session_state: st.session_state.r_key = 0
+            if 'last_action' not in st.session_state: st.session_state.last_action = 'none'
+
+            # 2:1 column ratio to give the left table more space for the output column
+            col_left, col_right = st.columns([2, 1])
+            
+            with col_left:
+                st.markdown("**Needs Attention / In Progress**")
+                left_event = st.dataframe(
+                    others_df[['name', 'status', 'output']], 
+                    hide_index=True, use_container_width=True, 
+                    on_select="rerun", selection_mode="single-row", 
+                    height=210, key=f"left_board_{st.session_state.l_key}"
+                )
                 
+            with col_right:
+                st.markdown("**Passed ✅**")
+                right_event = st.dataframe(
+                    passed_df[['name', 'status']], 
+                    hide_index=True, use_container_width=True, 
+                    on_select="rerun", selection_mode="single-row", 
+                    height=210, key=f"right_board_{st.session_state.r_key}"
+                )
+                
+            l_sel = left_event.selection.rows
+            r_sel = right_event.selection.rows
+            
+            # Logic to resolve selections and force visual deselect
+            if l_sel and st.session_state.last_action != 'left':
+                st.session_state.last_action = 'left'
+                st.session_state.r_key += 1
+                st.rerun()
+                
+            elif r_sel and st.session_state.last_action != 'right':
+                st.session_state.last_action = 'right'
+                st.session_state.l_key += 1
+                st.rerun()
+                
+            if not l_sel and st.session_state.last_action == 'left':
+                st.session_state.last_action = 'none'
+            if not r_sel and st.session_state.last_action == 'right':
+                st.session_state.last_action = 'none'
+                
+            # Grab the actual selected student's data
+            selected_student = None
+            if st.session_state.last_action == 'left' and l_sel:
+                selected_student = others_df.iloc[l_sel[0]]
+            elif st.session_state.last_action == 'right' and r_sel:
+                selected_student = passed_df.iloc[r_sel[0]]
+                
+            # Code Viewer Rendering
+            if selected_student is not None:
+                st.markdown("---")
                 st.markdown(f"### 💻 Code: {selected_student['name']}")
                 
                 if selected_student['status'] == "Not Started ⏳":
@@ -370,7 +428,6 @@ if role == "teacher":
         colA, colB = st.columns([3, 1])
         with colA:
             if bank_data:
-                # OPTION A: Distinguish questions by Author in the dropdown
                 bank_options = {f"{q['title']} (by {q.get('teacher_name', 'Unknown')})": q for q in bank_data}
                 selected_bank_q = st.selectbox("Load from Question Bank:", ["-- Select a Template --"] + list(bank_options.keys()))
                 
@@ -384,7 +441,6 @@ if role == "teacher":
                     if st.button("🗑️ Delete from Bank", use_container_width=True):
                         if selected_bank_q != "-- Select a Template --":
                             selected_q_data = bank_options[selected_bank_q]
-                            # OPTION A: Block deleting someone else's question
                             if selected_q_data.get('teacher_name') == user_fullname:
                                 supabase.table("question_bank").delete().eq("title", selected_q_data['title']).eq("teacher_name", user_fullname).execute()
                                 st.success(f"Deleted '{selected_q_data['title']}' from your bank.")
@@ -448,8 +504,6 @@ if role == "teacher":
 
             st.markdown("---")
             save_to_bank = st.checkbox("💾 Save/Update this template in the Question Bank", value=True)
-            
-            # OPTION B: Explicit Override Checkbox
             allow_overwrite = st.checkbox("⚠️ Overwrite existing template if my title matches (Leave unchecked to save as a new copy if warned)", value=False)
             
             if st.form_submit_button("Deploy Assignment to Students"):
@@ -459,7 +513,6 @@ if role == "teacher":
                     final_ast = {k: v for k, v in selected_ast.items() if v}
                     clean_tc = edited_tc.dropna(subset=['expected_output']).to_dict('records')
                     
-                    # Pre-check for Option B (Overwrite Conflict)
                     conflict_detected = False
                     if save_to_bank:
                         existing_mine = supabase.table("question_bank").select("title").eq("title", new_title).eq("teacher_name", user_fullname).execute().data
@@ -469,7 +522,6 @@ if role == "teacher":
                     if conflict_detected:
                         st.error(f"⚠️ You already have a template named '{new_title}' in the bank. Please check the 'Overwrite existing template' box below to update it, or change the title.")
                     else:
-                        # 1. Update/Insert to active current_task
                         payload = {
                             "class_name": sel_class, "period": str(sel_period),
                             "title": new_title,
@@ -484,20 +536,17 @@ if role == "teacher":
                             else:
                                 supabase.table("current_task").insert(payload).execute()
                                 
-                            # Clear old submissions for this class
                             supabase.table("submissions").delete().eq("class_name", sel_class).eq("period", str(sel_period)).execute()
                             
-                            # 2. Save to Question Bank
                             if save_to_bank:
                                 bank_payload = {
                                     "title": new_title,
-                                    "teacher_name": user_fullname, # Tracks the author!
+                                    "teacher_name": user_fullname, 
                                     "tags": new_tags,
                                     "task_description": new_desc,
                                     "test_cases": clean_tc,
                                     "ast_requirements": json.dumps(final_ast)
                                 }
-                                # We already checked for conflict. It's safe to upsert/insert.
                                 existing_bank = supabase.table("question_bank").select("title").eq("title", new_title).eq("teacher_name", user_fullname).execute().data
                                 if existing_bank:
                                     supabase.table("question_bank").update(bank_payload).eq("title", new_title).eq("teacher_name", user_fullname).execute()
