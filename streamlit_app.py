@@ -131,10 +131,13 @@ def validate_code_structure(student_code, requirements):
     if missing: return False, f"Missing required structures: {', '.join(missing)}"
     return True, "Structure valid!"
 
-def execute_test_cases(code, test_cases, ast_requirements, override_ast=False):
+def execute_test_cases(code, test_cases, ast_requirements, override_ast=False, setup_code="", teardown_code=""):
     status = "PASSED ✅"
     actual_display = ""
     error_display = ""
+    
+    # Combine the code invisibly for execution only
+    executable_code = f"{setup_code}\n\n{code}\n\n{teardown_code}".strip()
     
     if not test_cases:
         test_cases = [{"input": "", "expected_output": "", "is_hidden": False}]
@@ -147,7 +150,7 @@ def execute_test_cases(code, test_cases, ast_requirements, override_ast=False):
         try:
             sb_res = requests.post(
                 f"{PUBLIC_MIRROR}/submissions?wait=true", 
-                json={"source_code": code, "language_id": 71, "stdin": target_in}, 
+                json={"source_code": executable_code, "language_id": 71, "stdin": target_in}, 
                 timeout=15
             ).json()
             
@@ -181,6 +184,7 @@ def execute_test_cases(code, test_cases, ast_requirements, override_ast=False):
             
     ast_msg = ""
     if status == "PASSED ✅":
+        # Make sure AST checker only evaluates the student's raw code
         ast_passed, ast_msg = validate_code_structure(code, ast_requirements)
         if not ast_passed:
             status = "MANUAL REVIEW 🔍" if override_ast else "AST MISSING 🧩"
@@ -270,9 +274,9 @@ def get_task():
                 task['test_cases'] = []
                 
             return task
-        return {"title": "", "task_description": "", "test_cases": [], "ast_requirements": {}}
+        return {"title": "", "task_description": "", "test_cases": [], "ast_requirements": {}, "setup_code": "", "teardown_code": ""}
     except Exception:
-        return {"title": "", "task_description": "", "test_cases": [], "ast_requirements": {}}
+        return {"title": "", "task_description": "", "test_cases": [], "ast_requirements": {}, "setup_code": "", "teardown_code": ""}
 
 current_task = get_task()
 
@@ -418,9 +422,11 @@ if role == "teacher":
                                 code = selected_student['code']
                                 reqs = current_task.get('ast_requirements', {})
                                 test_cases = current_task.get('test_cases', [])
+                                setup_code = current_task.get('setup_code', '')
+                                teardown_code = current_task.get('teardown_code', '')
                                 is_override = selected_student['status'] == "MANUAL REVIEW 🔍"
                                 
-                                new_status, actual_display, _, _ = execute_test_cases(code, test_cases, reqs, override_ast=is_override)
+                                new_status, actual_display, _, _ = execute_test_cases(code, test_cases, reqs, override_ast=is_override, setup_code=setup_code, teardown_code=teardown_code)
                                             
                                 supabase.table("submissions").update({
                                     "status": new_status,
@@ -472,7 +478,6 @@ if role == "teacher":
             st.markdown("**OR** Upload JSON")
             uploaded_file = st.file_uploader("", type=["json"], label_visibility="collapsed")
             if uploaded_file is not None:
-                # Use file_id to guarantee we only process this exact upload once
                 if st.session_state.get('last_processed_file_id') != uploaded_file.file_id:
                     try:
                         ai_data = json.load(uploaded_file)
@@ -483,7 +488,6 @@ if role == "teacher":
                                 for task in ai_data:
                                     if "title" not in task: continue
                                     
-                                    # Strip leading numbers, periods, dashes, and spaces
                                     clean_title = re.sub(r'^\d+[\.\-\)]?\s*', '', task["title"]).strip()
                                     
                                     bank_payload = {
@@ -492,7 +496,9 @@ if role == "teacher":
                                         "tags": task.get("tags", ""),
                                         "task_description": task.get("task_description", ""),
                                         "test_cases": task.get("test_cases", []),
-                                        "ast_requirements": json.dumps(task.get("ast_requirements", {}))
+                                        "ast_requirements": json.dumps(task.get("ast_requirements", {})),
+                                        "setup_code": task.get("setup_code", ""),
+                                        "teardown_code": task.get("teardown_code", "")
                                     }
                                     
                                     existing = supabase.table("question_bank").select("title").eq("title", clean_title).eq("teacher_name", user_fullname).execute().data
@@ -538,6 +544,10 @@ if role == "teacher":
                 
             edited_tc = st.data_editor(default_tc, num_rows="dynamic", use_container_width=True, hide_index=True)
             
+            st.markdown("### ⚙️ Hidden Setup & Teardown (Optional)")
+            new_setup = st.text_area("Hidden Setup Code (Runs BEFORE student code. Good for creating files):", value=draft.get('setup_code', ''), height=100)
+            new_teardown = st.text_area("Hidden Teardown Code (Runs AFTER student code. Good for asserting file contents):", value=draft.get('teardown_code', ''), height=100)
+            
             st.markdown("### 🌳 Required AST Structures")
             
             selected_ast = {}
@@ -580,7 +590,9 @@ if role == "teacher":
                             "title": new_title,
                             "task_description": new_desc, 
                             "test_cases": clean_tc, 
-                            "ast_requirements": json.dumps(final_ast)
+                            "ast_requirements": json.dumps(final_ast),
+                            "setup_code": new_setup,
+                            "teardown_code": new_teardown
                         }
                         try:
                             existing = supabase.table("current_task").select("id").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
@@ -598,7 +610,9 @@ if role == "teacher":
                                     "tags": new_tags,
                                     "task_description": new_desc,
                                     "test_cases": clean_tc,
-                                    "ast_requirements": json.dumps(final_ast)
+                                    "ast_requirements": json.dumps(final_ast),
+                                    "setup_code": new_setup,
+                                    "teardown_code": new_teardown
                                 }
                                 existing_bank = supabase.table("question_bank").select("title").eq("title", new_title).eq("teacher_name", user_fullname).execute().data
                                 if existing_bank:
@@ -660,8 +674,10 @@ else: # STUDENT VIEW
                 try:
                     reqs = current_task.get('ast_requirements', {})
                     test_cases = current_task.get('test_cases', [])
+                    setup_code = current_task.get('setup_code', '')
+                    teardown_code = current_task.get('teardown_code', '')
                     
-                    status, actual_display, error_display, ast_msg = execute_test_cases(code, test_cases, reqs, override_ast)
+                    status, actual_display, error_display, ast_msg = execute_test_cases(code, test_cases, reqs, override_ast, setup_code, teardown_code)
                     
                     sub_payload = {
                         "name": user_fullname, 
