@@ -309,14 +309,22 @@ if role == "teacher":
         st.button("🔄 Refresh Data", use_container_width=True, on_click=refresh_btn_click)
         
     t1, t2 = st.tabs(["🏆 Leaderboard", "⚙️ Setup"])
-    
+
+
     with t1:
         roster_data = supabase.table("rosters").select("student_name").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
         
         if roster_data:
             roster_df = pd.DataFrame(roster_data).rename(columns={"student_name": "name"})
-            subs = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
             
+            # --- NEW CLEANUP CODE ---
+            # Drops ghost rows where the name is None, NaN, or purely empty space
+            roster_df = roster_df.dropna(subset=['name'])
+            roster_df = roster_df[roster_df['name'].str.strip() != '']
+            # ------------------------
+            
+            subs = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
+                
             if subs:
                 subs_df = pd.DataFrame(subs)
                 df = pd.merge(roster_df, subs_df, on="name", how="left")
