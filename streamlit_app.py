@@ -123,7 +123,16 @@ def validate_code_structure(student_code, requirements):
     missing = []
     for category, items in requirements.items():
         for item in items:
-            if item in NODE_MAP and NODE_MAP[item] not in found_nodes: missing.append(item)
+            if item in NODE_MAP:
+                # Allow >= to satisfy >
+                if item == "Greater Than (>)" and (ast.Gt in found_nodes or ast.GtE in found_nodes):
+                    continue
+                # Allow <= to satisfy <
+                if item == "Less Than (<)" and (ast.Lt in found_nodes or ast.LtE in found_nodes):
+                    continue
+                    
+                if NODE_MAP[item] not in found_nodes:
+                    missing.append(item)
             elif item in FUNC_MAP and FUNC_MAP[item] not in found_funcs: missing.append(item)
             elif item in METHOD_MAP and METHOD_MAP[item] not in found_methods: missing.append(item)
             elif item in LIB_MAP and LIB_MAP[item] not in found_libs: missing.append(item)
@@ -136,7 +145,6 @@ def execute_test_cases(code, test_cases, ast_requirements, override_ast=False, s
     actual_display = ""
     error_display = ""
     
-    # Combine the code invisibly for execution only
     executable_code = f"{setup_code}\n\n{code}\n\n{teardown_code}".strip()
     
     if not test_cases:
@@ -184,7 +192,6 @@ def execute_test_cases(code, test_cases, ast_requirements, override_ast=False, s
             
     ast_msg = ""
     if status == "PASSED ✅":
-        # Make sure AST checker only evaluates the student's raw code
         ast_passed, ast_msg = validate_code_structure(code, ast_requirements)
         if not ast_passed:
             status = "MANUAL REVIEW 🔍" if override_ast else "AST MISSING 🧩"
@@ -273,10 +280,17 @@ def get_task():
             elif not isinstance(tc, list):
                 task['test_cases'] = []
                 
+            absent = task.get('absent_students')
+            if isinstance(absent, str):
+                try: task['absent_students'] = json.loads(absent)
+                except: task['absent_students'] = []
+            elif not isinstance(absent, list):
+                task['absent_students'] = []
+                
             return task
-        return {"title": "", "task_description": "", "test_cases": [], "ast_requirements": {}, "setup_code": "", "teardown_code": ""}
+        return {"title": "", "task_description": "", "test_cases": [], "ast_requirements": {}, "setup_code": "", "teardown_code": "", "absent_students": []}
     except Exception:
-        return {"title": "", "task_description": "", "test_cases": [], "ast_requirements": {}, "setup_code": "", "teardown_code": ""}
+        return {"title": "", "task_description": "", "test_cases": [], "ast_requirements": {}, "setup_code": "", "teardown_code": "", "absent_students": []}
 
 current_task = get_task()
 
@@ -309,22 +323,21 @@ if role == "teacher":
         st.button("🔄 Refresh Data", use_container_width=True, on_click=refresh_btn_click)
         
     t1, t2 = st.tabs(["🏆 Leaderboard", "⚙️ Setup"])
-
-
+    
     with t1:
         roster_data = supabase.table("rosters").select("student_name").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
         
         if roster_data:
             roster_df = pd.DataFrame(roster_data).rename(columns={"student_name": "name"})
             
-            # --- NEW CLEANUP CODE ---
-            # Drops ghost rows where the name is None, NaN, or purely empty space
             roster_df = roster_df.dropna(subset=['name'])
             roster_df = roster_df[roster_df['name'].str.strip() != '']
-            # ------------------------
+            
+            absent_list = current_task.get("absent_students", [])
+            roster_df = roster_df[~roster_df['name'].isin(absent_list)]
             
             subs = supabase.table("submissions").select("*").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
-                
+            
             if subs:
                 subs_df = pd.DataFrame(subs)
                 df = pd.merge(roster_df, subs_df, on="name", how="left")
@@ -538,6 +551,11 @@ if role == "teacher":
             new_tags = st.text_input("Tags (comma separated, for bank filtering):", value=draft.get('tags', ''))
             new_desc = st.text_area("Markdown Instructions:", value=draft.get('task_description', ''), height=150)
             
+            st.markdown("### 👥 Player Management")
+            roster_setup = supabase.table("rosters").select("student_name").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
+            all_students = sorted([r["student_name"] for r in roster_setup if r.get("student_name")]) if roster_setup else []
+            absent_selection = st.multiselect("Mark Students as Absent (Hides them from the leaderboard):", all_students, default=[s for s in draft.get('absent_students', []) if s in all_students])
+            
             st.markdown("### 🧪 Test Cases")
             
             default_tc = pd.DataFrame([{"input": "", "expected_output": "", "is_hidden": False}])
@@ -600,7 +618,8 @@ if role == "teacher":
                             "test_cases": clean_tc, 
                             "ast_requirements": json.dumps(final_ast),
                             "setup_code": new_setup,
-                            "teardown_code": new_teardown
+                            "teardown_code": new_teardown,
+                            "absent_students": json.dumps(absent_selection)
                         }
                         try:
                             existing = supabase.table("current_task").select("id").eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
