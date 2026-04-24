@@ -13,6 +13,30 @@ from code_editor import code_editor
 # --- 1. INITIALIZATION & PERSISTENCE ---
 st.set_page_config(page_title="American Heritage LMS", layout="wide", page_icon="🏫")
 
+# --- MASTER LANGUAGE DICTIONARY ---
+LANGUAGE_CONFIG = {
+    "Python": {
+        "judge0_id": 71, 
+        "editor_lang": "python", 
+        "default_code": ""
+    },
+    "JavaScript (Node)": {
+        "judge0_id": 63, 
+        "editor_lang": "javascript", 
+        "default_code": ""
+    },
+    "Java": {
+        "judge0_id": 62, 
+        "editor_lang": "java", 
+        "default_code": "public class Main {\n    public static void main(String[] args) {\n        // Your code here\n    }\n}"
+    },
+    "C": {
+        "judge0_id": 50, 
+        "editor_lang": "c_cpp", 
+        "default_code": "#include <stdio.h>\n\nint main() {\n    // Your code here\n    return 0;\n}"
+    }
+}
+
 # --- BRANDING & CSS INJECTION ---
 st.markdown("""
     <style>
@@ -124,10 +148,8 @@ def validate_code_structure(student_code, requirements):
     for category, items in requirements.items():
         for item in items:
             if item in NODE_MAP:
-                # Allow >= to satisfy >
                 if item == "Greater Than (>)" and (ast.Gt in found_nodes or ast.GtE in found_nodes):
                     continue
-                # Allow <= to satisfy <
                 if item == "Less Than (<)" and (ast.Lt in found_nodes or ast.LtE in found_nodes):
                     continue
                     
@@ -140,12 +162,13 @@ def validate_code_structure(student_code, requirements):
     if missing: return False, f"Missing required structures: {', '.join(missing)}"
     return True, "Structure valid!"
 
-def execute_test_cases(code, test_cases, ast_requirements, override_ast=False, setup_code="", teardown_code=""):
+def execute_test_cases(code, test_cases, ast_requirements, selected_lang="Python", override_ast=False, setup_code="", teardown_code=""):
     status = "PASSED ✅"
     actual_display = ""
     error_display = ""
     
     executable_code = f"{setup_code}\n\n{code}\n\n{teardown_code}".strip()
+    lang_id = LANGUAGE_CONFIG[selected_lang]["judge0_id"]
     
     if not test_cases:
         test_cases = [{"input": "", "expected_output": "", "is_hidden": False}]
@@ -158,7 +181,7 @@ def execute_test_cases(code, test_cases, ast_requirements, override_ast=False, s
         try:
             sb_res = requests.post(
                 f"{PUBLIC_MIRROR}/submissions?wait=true", 
-                json={"source_code": executable_code, "language_id": 71, "stdin": target_in}, 
+                json={"source_code": executable_code, "language_id": lang_id, "stdin": target_in}, 
                 timeout=15
             ).json()
             
@@ -192,9 +215,12 @@ def execute_test_cases(code, test_cases, ast_requirements, override_ast=False, s
             
     ast_msg = ""
     if status == "PASSED ✅":
-        ast_passed, ast_msg = validate_code_structure(code, ast_requirements)
-        if not ast_passed:
-            status = "MANUAL REVIEW 🔍" if override_ast else "AST MISSING 🧩"
+        if selected_lang == "Python":
+            ast_passed, ast_msg = validate_code_structure(code, ast_requirements)
+            if not ast_passed:
+                status = "MANUAL REVIEW 🔍" if override_ast else "AST MISSING 🧩"
+        else:
+            ast_msg = f"AST checking disabled for {selected_lang}. Output verified!"
             
     return status, actual_display, error_display, ast_msg
 
@@ -288,9 +314,9 @@ def get_task():
                 task['absent_students'] = []
                 
             return task
-        return {"title": "", "task_description": "", "test_cases": [], "ast_requirements": {}, "setup_code": "", "teardown_code": "", "absent_students": []}
+        return {"title": "", "language": "Python", "task_description": "", "test_cases": [], "ast_requirements": {}, "setup_code": "", "teardown_code": "", "absent_students": []}
     except Exception:
-        return {"title": "", "task_description": "", "test_cases": [], "ast_requirements": {}, "setup_code": "", "teardown_code": "", "absent_students": []}
+        return {"title": "", "language": "Python", "task_description": "", "test_cases": [], "ast_requirements": {}, "setup_code": "", "teardown_code": "", "absent_students": []}
 
 current_task = get_task()
 
@@ -445,9 +471,10 @@ if role == "teacher":
                                 test_cases = current_task.get('test_cases', [])
                                 setup_code = current_task.get('setup_code', '')
                                 teardown_code = current_task.get('teardown_code', '')
+                                task_lang = current_task.get('language', 'Python')
                                 is_override = selected_student['status'] == "MANUAL REVIEW 🔍"
                                 
-                                new_status, actual_display, _, _ = execute_test_cases(code, test_cases, reqs, override_ast=is_override, setup_code=setup_code, teardown_code=teardown_code)
+                                new_status, actual_display, _, _ = execute_test_cases(code, test_cases, reqs, selected_lang=task_lang, override_ast=is_override, setup_code=setup_code, teardown_code=teardown_code)
                                             
                                 supabase.table("submissions").update({
                                     "status": new_status,
@@ -514,6 +541,7 @@ if role == "teacher":
                                     bank_payload = {
                                         "title": clean_title,
                                         "teacher_name": user_fullname, 
+                                        "language": task.get("language", "Python"),
                                         "tags": task.get("tags", ""),
                                         "task_description": task.get("task_description", ""),
                                         "test_cases": task.get("test_cases", []),
@@ -546,6 +574,18 @@ if role == "teacher":
         st.markdown("---")
         st.markdown("### 📝 Assignment Setup & Preview")
         
+        # --- 1. LANGUAGE SELECTOR (OUTSIDE THE FORM) ---
+        default_lang = draft.get('language', 'Python')
+        lang_options = list(LANGUAGE_CONFIG.keys())
+        lang_idx = lang_options.index(default_lang) if default_lang in lang_options else 0
+        
+        selected_lang = st.selectbox("Programming Language:", lang_options, index=lang_idx)
+        
+        if selected_lang != default_lang:
+            draft['language'] = selected_lang
+            st.session_state['draft_task'] = draft
+        # -----------------------------------------------
+        
         with st.form("task_setup"):
             new_title = st.text_input("Assignment Title:", value=draft.get('title', ''))
             new_tags = st.text_input("Tags (comma separated, for bank filtering):", value=draft.get('tags', ''))
@@ -574,26 +614,30 @@ if role == "teacher":
             new_setup = st.text_area("Hidden Setup Code (Runs BEFORE student code. Good for creating files):", value=draft.get('setup_code', ''), height=100)
             new_teardown = st.text_area("Hidden Teardown Code (Runs AFTER student code. Good for asserting file contents):", value=draft.get('teardown_code', ''), height=100)
             
-            st.markdown("### 🌳 Required AST Structures")
-            
+            # --- 2. CONDITIONALLY RENDER AST ---
             selected_ast = {}
-            loaded_ast = draft.get('ast_requirements')
-            if isinstance(loaded_ast, str):
-                try: loaded_ast = json.loads(loaded_ast)
-                except Exception: loaded_ast = {}
-            if not isinstance(loaded_ast, dict): loaded_ast = {}
-            
-            for category, items in AST_CATEGORIES.items():
-                with st.expander(f"{category}"):
-                    selected_ast[category] = []
-                    for item in items:
-                        is_checked = item in loaded_ast.get(category, [])
-                        if st.checkbox(item, value=is_checked, key=f"ast_{category}_{item}"):
-                            selected_ast[category].append(item)
+            if selected_lang == "Python":
+                st.markdown("### 🌳 Required AST Structures")
+                loaded_ast = draft.get('ast_requirements')
+                if isinstance(loaded_ast, str):
+                    try: loaded_ast = json.loads(loaded_ast)
+                    except Exception: loaded_ast = {}
+                if not isinstance(loaded_ast, dict): loaded_ast = {}
+                
+                for category, items in AST_CATEGORIES.items():
+                    with st.expander(f"{category}"):
+                        selected_ast[category] = []
+                        for item in items:
+                            is_checked = item in loaded_ast.get(category, [])
+                            if st.checkbox(item, value=is_checked, key=f"ast_{category}_{item}"):
+                                selected_ast[category].append(item)
+            else:
+                st.info(f"ℹ️ **AST Checking Disabled.** You have selected {selected_lang}. Submissions for this task will be graded purely on Input/Output Test Cases.")
+            # -----------------------------------
 
             st.markdown("---")
             save_to_bank = st.checkbox("💾 Save/Update this template in the Question Bank", value=True)
-            allow_overwrite = st.checkbox("⚠️ Overwrite existing template if my title matches (Leave unchecked to save as a new copy if warned)", value=False)
+            allow_overwrite = st.checkbox("⚠️ Overwrite existing template if my title matches", value=False)
             
             if st.form_submit_button("Deploy Assignment to Students"):
                 if not new_title.strip():
@@ -614,6 +658,7 @@ if role == "teacher":
                         payload = {
                             "class_name": sel_class, "period": str(sel_period),
                             "title": new_title,
+                            "language": selected_lang,
                             "task_description": new_desc, 
                             "test_cases": clean_tc, 
                             "ast_requirements": json.dumps(final_ast),
@@ -634,6 +679,7 @@ if role == "teacher":
                                 bank_payload = {
                                     "title": new_title,
                                     "teacher_name": user_fullname, 
+                                    "language": selected_lang,
                                     "tags": new_tags,
                                     "task_description": new_desc,
                                     "test_cases": clean_tc,
@@ -680,15 +726,21 @@ else: # STUDENT VIEW
         
     override_ast = st.checkbox("🚩 **Override Structural Check (Flag for Manual Review)**", help="Check this if your code produces the right output but fails the AST check, and you want your teacher to review your alternative approach.")
         
+    task_lang = current_task.get('language', 'Python')
+    editor_lang_mode = LANGUAGE_CONFIG.get(task_lang, LANGUAGE_CONFIG["Python"])["editor_lang"]
+        
     code_key = f"student_code_{sel_class}_{sel_period}"
     if code_key not in st.session_state:
         existing_sub = supabase.table("submissions").select("code").eq("name", user_fullname).eq("class_name", sel_class).eq("period", str(sel_period)).execute().data
-        if existing_sub: st.session_state[code_key] = existing_sub[0]['code']
-        else: st.session_state[code_key] = ""
+        if existing_sub: 
+            st.session_state[code_key] = existing_sub[0]['code']
+        else: 
+            default_boilerplate = LANGUAGE_CONFIG.get(task_lang, LANGUAGE_CONFIG["Python"])["default_code"]
+            st.session_state[code_key] = default_boilerplate
     
     editor_btns = [{"name": "Run & Submit", "feather": "Play", "primary": True, "hasText": True, "showWithIcon": True, "commands": ["submit"], "style": {"bottom": "15px", "right": "15px", "position": "absolute"}}]
     
-    response = code_editor(st.session_state[code_key], lang="python", buttons=editor_btns, key="student_editor_instance")
+    response = code_editor(st.session_state[code_key], lang=editor_lang_mode, buttons=editor_btns, key="student_editor_instance")
     
     if response and response.get("type") == "submit":
         code = response.get("text", "")
@@ -704,7 +756,7 @@ else: # STUDENT VIEW
                     setup_code = current_task.get('setup_code', '')
                     teardown_code = current_task.get('teardown_code', '')
                     
-                    status, actual_display, error_display, ast_msg = execute_test_cases(code, test_cases, reqs, override_ast, setup_code, teardown_code)
+                    status, actual_display, error_display, ast_msg = execute_test_cases(code, test_cases, reqs, selected_lang=task_lang, override_ast=override_ast, setup_code=setup_code, teardown_code=teardown_code)
                     
                     sub_payload = {
                         "name": user_fullname, 
